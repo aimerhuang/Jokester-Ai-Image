@@ -1,0 +1,181 @@
+<template>
+  <div class="detail-page">
+    <el-skeleton v-if="loading" :rows="10" animated />
+    <template v-else>
+      <section class="visual-panel page-card">
+        <div class="visual-toolbar">
+          <div>
+            <h2>{{ app.t('imageDetail.previewTitle') }}</h2>
+            <p>{{ app.t('imageDetail.previewDescription') }}</p>
+          </div>
+          <div class="visual-actions">
+            <el-button @click="copyPrompt">{{ app.t('imageDetail.copy') }}</el-button>
+            <el-button @click="downloadCurrent">{{ app.t('common.download') }}</el-button>
+            <el-button type="primary" plain @click="toggleFavorite" :title="favorite ? app.t('gallery.unfavorite') : app.t('gallery.favorite')">{{ favorite ? '❤️' : '🤍' }}</el-button>
+          </div>
+        </div>
+        <el-image v-if="imageUrl" class="hero-image" :src="imageUrl" :preview-src-list="[imageUrl]" fit="contain" preview-teleported />
+        <EmptyState v-else :title="app.t('playground.emptyTitle')" :description="app.t('playground.emptyDescription')" />
+      </section>
+
+      <aside class="control-panel page-card">
+        <section>
+          <h3>{{ app.t('imageDetail.prompt') }}</h3>
+          <el-input v-model="prompt" type="textarea" :rows="6" />
+        </section>
+
+        <section>
+          <h3>{{ app.t('imageDetail.parameters') }}</h3>
+          <div class="params-grid">
+            <span>{{ app.t('playground.model') }}</span><strong>{{ record?.modelName || '-' }}</strong>
+            <span>{{ app.t('playground.resolution') }}</span><strong>{{ record?.resolutionCode || '-' }}</strong>
+            <span>{{ app.t('playground.quality') }}</span><strong>{{ record?.qualityCode || '-' }}</strong>
+            <span>{{ app.t('playground.aspectRatio') }}</span><strong>{{ record?.aspectRatioCode || '-' }}</strong>
+          </div>
+        </section>
+
+        <section>
+          <h3>{{ app.t('imageDetail.references') }}</h3>
+          <div v-if="referenceImages.length" class="reference-grid">
+            <el-image v-for="url in referenceImages" :key="url" :src="url" :preview-src-list="referenceImages" fit="cover" preview-teleported />
+          </div>
+          <p v-else class="muted">{{ app.t('imageDetail.noReferences') }}</p>
+        </section>
+
+        <div class="bottom-actions">
+          <el-button type="primary" class="soft-button" @click="reuseConfig">{{ app.t('imageDetail.editImage') }}</el-button>
+          <el-button @click="reuseConfig">{{ app.t('imageDetail.reuseConfig') }}</el-button>
+          <el-button @click="usePrompt">{{ app.t('imageDetail.usePrompt') }}</el-button>
+          <el-button @click="useAsReference">{{ app.t('imageDetail.useAsReference') }}</el-button>
+        </div>
+      </aside>
+    </template>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import EmptyState from '@/components/common/EmptyState.vue'
+import { favoriteImageRecord, getImageRecord } from '@/services/aiImages'
+import { useAppStore } from '@/stores/app'
+import { downloadImage, getImageUrl, saveReuseConfig } from '@/utils/imageActions'
+import type { ApiError } from '@/types/api'
+import type { ImageRecord } from '@/types/image'
+
+const app = useAppStore()
+const route = useRoute()
+const router = useRouter()
+const record = ref<ImageRecord | null>(null)
+const prompt = ref('')
+const loading = ref(false)
+const imageUrl = computed(() => getImageUrl(record.value))
+const referenceImages = computed(() => record.value?.referenceImageUrls || [])
+const favorite = computed(() => record.value ? Boolean(record.value.favorite || record.value.isFavorite) : false)
+
+onMounted(async () => {
+  loading.value = true
+  try {
+    record.value = await getImageRecord(String(route.params.id))
+    prompt.value = record.value.prompt
+  } finally {
+    loading.value = false
+  }
+})
+
+async function copyPrompt() {
+  try {
+    await navigator.clipboard.writeText(prompt.value)
+    ElMessage.success(app.t('imageDetail.copySuccess'))
+  } catch {
+    ElMessage.warning(prompt.value)
+  }
+}
+
+function downloadCurrent() {
+  downloadImage(imageUrl.value, `image-${record.value?.id || globalThis.crypto?.randomUUID?.() || 'generated'}.png`)
+}
+
+async function toggleFavorite() {
+  if (!record.value?.id) return ElMessage.warning(app.t('gallery.missingImageId'))
+  const url = imageUrl.value
+  if (!url) return ElMessage.warning(app.t('gallery.missingImageUrl'))
+
+  const next = !Boolean(record.value.favorite || record.value.isFavorite)
+  record.value.favorite = next
+  record.value.isFavorite = next
+
+  try {
+    const updated = await favoriteImageRecord(record.value.id, { imageUrl: url, isFavorite: next })
+    if (updated && typeof updated === 'object') {
+      const serverFavorite = updated.isFavorite ?? updated.favorite
+      if (typeof serverFavorite === 'boolean') {
+        record.value.favorite = serverFavorite
+        record.value.isFavorite = serverFavorite
+      }
+    }
+    ElMessage.success((record.value.favorite || record.value.isFavorite) ? app.t('gallery.favoriteAdded') : app.t('gallery.favoriteRemoved'))
+  } catch (error) {
+    record.value.favorite = !next
+    record.value.isFavorite = !next
+    ElMessage.error((error as ApiError).message)
+  }
+}
+
+function currentConfig() {
+  if (!record.value) return null
+  return {
+    prompt: prompt.value,
+    modelName: record.value.modelName,
+    resolutionCode: record.value.resolutionCode,
+    qualityCode: record.value.qualityCode,
+    aspectRatioCode: record.value.aspectRatioCode,
+    referenceImageUrls: record.value.referenceImageUrls || [],
+  }
+}
+
+function reuseConfig() {
+  const config = currentConfig()
+  if (!config) return
+  saveReuseConfig(config)
+  router.push('/playground')
+}
+
+async function usePrompt() {
+  await copyPrompt()
+  router.push({ path: '/playground', query: { prompt: prompt.value } })
+}
+
+function useAsReference() {
+  const url = imageUrl.value
+  if (!url) return
+  const config = currentConfig() || { prompt: prompt.value }
+  saveReuseConfig({ ...config, referenceImageUrls: [url] })
+  router.push('/playground')
+}
+
+</script>
+
+<style scoped>
+.detail-page { display: grid; grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr); gap: 24px; align-items: start; }
+.visual-panel, .control-panel { min-width: 0; padding: 24px; }
+.visual-panel { min-height: 680px; display: flex; flex-direction: column; gap: 18px; }
+.visual-toolbar { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+h2, h3, p { margin: 0; }
+.visual-toolbar p { margin-top: 8px; color: var(--color-text-muted); }
+.visual-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.hero-image { flex: 1; width: 100%; min-height: 460px; border-radius: var(--radius-lg); background: var(--color-primary-soft); }
+.hero-image :deep(img) { width: 100%; max-height: 640px; object-fit: contain; }
+.loading-box { flex: 1; min-height: 460px; display: grid; place-items: center; border-radius: var(--radius-xl); background: linear-gradient(90deg, var(--color-primary-soft), var(--color-surface), var(--color-primary-soft)); background-size: 220% 100%; animation: shimmer 1.4s infinite; color: var(--color-text-muted); font-weight: 700; }
+.control-panel { display: grid; gap: 22px; position: sticky; top: 24px; }
+.control-panel section { display: grid; gap: 12px; }
+.params-grid { display: grid; grid-template-columns: minmax(100px, auto) 1fr; gap: 10px 14px; }
+.params-grid span, .muted { color: var(--color-text-muted); }
+.reference-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 10px; }
+.reference-grid .el-image { aspect-ratio: 1; border-radius: var(--radius-sm); overflow: hidden; background: var(--color-primary-soft); }
+.bottom-actions { display: grid; gap: 10px; }
+@keyframes shimmer { to { background-position: -220% 0; } }
+@media (max-width: 1100px) { .detail-page { grid-template-columns: 1fr; } .control-panel { position: static; } }
+@media (max-width: 680px) { .visual-toolbar { flex-direction: column; } .visual-actions { justify-content: flex-start; } }
+</style>
