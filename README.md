@@ -22,6 +22,7 @@ npm install
 ```env
 VITE_API_BASE_URL=/api
 VITE_API_DOC_URL=http://localhost:5049/swagger
+VITE_API_PROXY_TARGET=http://localhost:5049
 VITE_DEFAULT_LOCALE=zh-CN
 VITE_DEFAULT_THEME=light
 ```
@@ -32,7 +33,23 @@ VITE_DEFAULT_THEME=light
 npm run dev
 ```
 
-Vite 开发代理会把 `/api` 和 `/ai-images` 转发到 `http://localhost:5049`。
+Vite 开发代理会把 `/api`、`/ai-images`、`/avatar` 和 `/nano-banana2-images` 转发到 `http://localhost:5049`。
+
+## 使用 pm2 启动前端
+
+如果你想让前端常驻运行，可以使用项目根目录下的 [ecosystem.config.cjs](ecosystem.config.cjs)：
+
+```bash
+pm2 start ecosystem.config.cjs
+pm2 logs jokester-ai-image-frontend
+```
+
+停止进程：
+
+```bash
+pm2 stop jokester-ai-image-frontend
+pm2 delete jokester-ai-image-frontend
+```
 
 ## 常用命令
 

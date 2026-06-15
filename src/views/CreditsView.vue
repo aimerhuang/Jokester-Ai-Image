@@ -34,15 +34,18 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { useCreditsStore } from '@/stores/credits'
 import type { ApiError } from '@/types/api'
 
 const app = useAppStore()
+const auth = useAuthStore()
 const credits = useCreditsStore()
 const pageIndex = ref(1)
 const pageSize = 10
 
-onMounted(() => {
+onMounted(async () => {
+  if (!auth.user) await auth.fetchCurrentUser().catch(() => undefined)
   credits.fetchSummary().catch(() => undefined)
   credits.fetchRecords(pageIndex.value, pageSize).catch(() => undefined)
 })

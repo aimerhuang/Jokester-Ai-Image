@@ -29,13 +29,18 @@ function readString(value: unknown) {
 }
 
 function readErrorMessage(payload: unknown, fallback = DEFAULT_ERROR_MESSAGE) {
+  // Direct string response (e.g. plain-text error from server)
+  if (typeof payload === 'string' && payload.trim().length > 0) {
+    return payload.trim()
+  }
+
   if (isRecord(payload)) {
-    for (const key of ['message', 'msg', 'errorMessage', 'error', 'detail', 'title']) {
+    for (const key of ['message', 'msg', 'errorMessage', 'error', 'detail', 'title', 'error_description']) {
       const message = readString(payload[key])
       if (message) return message
     }
 
-    for (const key of ['errors']) {
+    for (const key of ['errors', 'validationErrors']) {
       const value = payload[key]
       if (Array.isArray(value)) {
         const message = value.map(readString).filter(Boolean).join('\n')
@@ -81,10 +86,16 @@ http.interceptors.response.use(
   },
   (error: AxiosError<ApiResponse<unknown>>) => {
     const payload = error.response?.data
+    const statusCode = error.response?.status
+
+    // Try to extract the API's own error message first; fall back to axios' message only as a last resort.
+    const extracted = readErrorMessage(payload, '')
+    const fallback = extracted || error.message || DEFAULT_ERROR_MESSAGE
+
     const apiError: ApiError = {
-      code: normalizeCode(payload?.code, error.response?.status || 500),
-      status: error.response?.status,
-      message: readErrorMessage(payload, error.message || DEFAULT_ERROR_MESSAGE),
+      code: normalizeCode(payload?.code, statusCode || 500),
+      status: statusCode,
+      message: fallback,
     }
     if (apiError.status === 401) {
       localStorage.removeItem(TOKEN_KEY)
