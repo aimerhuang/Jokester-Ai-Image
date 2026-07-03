@@ -84,6 +84,8 @@ const result = ref<GeneratedImageResult | null>(null)
 const pricingOptions = ref<AiImagePricingOption[]>([])
 const modelCode = ref('')
 const batchSize = ref(1)
+const TASK_TIMEOUT_PER_IMAGE_MS = 3 * 60 * 1000
+const MAX_TASK_TIMEOUT_MS = 10 * 60 * 1000
 const form = reactive({ prompt: '', resolutionCode: '', qualityCode: '', aspectRatioCode: '', referenceImageUrls: [] as string[] })
 const { polling, handleInitialResult, resumePending } = useImageTaskPolling({
   onUpdate: (task) => {
@@ -93,6 +95,10 @@ const { polling, handleInitialResult, resumePending } = useImageTaskPolling({
     credits.fetchSummary().catch(() => undefined)
   },
   onFailure: () => {
+    credits.fetchSummary().catch(() => undefined)
+  },
+  onExpired: () => {
+    ElMessage.warning(app.t('playground.generationExpired'))
     credits.fetchSummary().catch(() => undefined)
   },
 })
@@ -269,6 +275,10 @@ function downloadCurrent() {
   downloadImage(imageUrl.value, `image-${globalThis.crypto?.randomUUID?.() || 'generated'}.png`)
 }
 
+function getTaskTimeoutMs(imageCount: number) {
+  return Math.min(imageCount * TASK_TIMEOUT_PER_IMAGE_MS, MAX_TASK_TIMEOUT_MS)
+}
+
 async function submit() {
   if (referenceUploading.value) return ElMessage.warning('Reference images are still uploading')
   if (!form.prompt.trim()) return ElMessage.warning(app.t('playground.prompt'))
@@ -277,14 +287,18 @@ async function submit() {
 
   submitting.value = true
   try {
+    const imageCount = Math.min(batchSize.value, maxImageCount.value)
     const request: CreateImageTaskRequest = {
       ...form,
       qualityCode: isNanoModel.value ? '' : form.qualityCode,
       modelName: modelCode.value,
-      imageCount: Math.min(batchSize.value, maxImageCount.value),
+      imageCount,
     }
     const response = await generateImage(request)
-    handleInitialResult(response)
+    handleInitialResult(response, {
+      expiresAt: Date.now() + getTaskTimeoutMs(imageCount),
+      imageCount,
+    })
     void credits.fetchSummary().catch(() => undefined)
   } catch (error) {
     ElMessage.error((error as ApiError).message || app.t('common.retry'))

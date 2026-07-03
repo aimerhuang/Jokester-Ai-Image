@@ -142,8 +142,10 @@ function applySearch() {
 }
 
 function preview(record: ImageRecord) {
-  if (!record.id) return
-  router.push(`/images/${record.id}/edit`)
+  const id = record.id || record.taskId
+  if (!id) return
+  const imageUrl = getImageUrl(record)
+  router.push({ path: `/images/${id}/edit`, query: imageUrl ? { url: imageUrl } : undefined })
 }
 
 async function toggleFavorite(record: ImageRecord) {

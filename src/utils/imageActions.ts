@@ -12,23 +12,68 @@ export interface ReuseImageConfig {
   referenceImageUrls?: string[]
 }
 
-type ImageUrlSource = Pick<ImageRecord, 'url' | 'dataUrl' | 'resultUrls' | 'result_urls' | 'base64' | 'mimeType'>
-type ImageKeySource = Pick<ImageRecord, 'id' | 'taskId' | 'url' | 'dataUrl' | 'resultUrls' | 'result_urls'>
+type ImageUrlSource = Pick<ImageRecord, 'url' | 'imageUrl' | 'image_url' | 'fileUrl' | 'file_url' | 'dataUrl' | 'resultUrls' | 'result_urls' | 'imageUrls' | 'image_urls' | 'urls' | 'images' | 'base64' | 'mimeType'>
+type ImageKeySource = Pick<ImageRecord, 'id' | 'taskId' | 'url' | 'imageUrl' | 'image_url' | 'fileUrl' | 'file_url' | 'dataUrl' | 'resultUrls' | 'result_urls' | 'imageUrls' | 'image_urls' | 'urls' | 'images'>
 
-function readFirstResultUrl(value: unknown) {
-  if (Array.isArray(value)) return value.find((item): item is string => typeof item === 'string' && Boolean(item.trim()))?.trim() || ''
+type ImageUrlObject = { url?: unknown; imageUrl?: unknown; image_url?: unknown; fileUrl?: unknown; file_url?: unknown }
+
+function normalizeImageUrl(url: string) {
+  const text = url.trim().replace(/\\/g, '/')
+  if (!text) return ''
+  if (/^(https?:)?\/\//i.test(text) || text.startsWith('data:') || text.startsWith('blob:')) return text
+  if (text.startsWith('/')) return text
+  if (text.startsWith('./')) return normalizeImageUrl(text.slice(2))
+  if (text.startsWith('ai-images/') || text.startsWith('nano-banana2-images/') || text.startsWith('avatar/')) return `/${text}`
+  return `/ai-images/${text}`
+}
+
+function readImageUrls(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(readImageUrls)
   if (typeof value === 'string') {
     const text = value.trim()
-    if (!text) return ''
+    if (!text) return []
     try {
       const parsed = JSON.parse(text) as unknown
-      if (Array.isArray(parsed)) return readFirstResultUrl(parsed)
+      const parsedUrls = readImageUrls(parsed)
+      if (parsedUrls.length) return parsedUrls
     } catch {
-      return text
+      return [normalizeImageUrl(text)]
     }
-    return text
+    return [normalizeImageUrl(text)]
   }
-  return ''
+  if (value && typeof value === 'object') {
+    const item = value as ImageUrlObject
+    return [item.url, item.imageUrl, item.image_url, item.fileUrl, item.file_url].flatMap(readImageUrls)
+  }
+  return []
+}
+
+function uniqueUrls(urls: string[]) {
+  return [...new Set(urls.map((url) => url.trim()).filter(Boolean))]
+}
+
+function readFirstResultUrl(value: unknown) {
+  return readImageUrls(value)[0] || ''
+}
+
+export function getImageUrls(record?: ImageUrlSource | null) {
+  if (!record) return []
+  const urls = [
+    record.url,
+    record.imageUrl,
+    record.image_url,
+    record.fileUrl,
+    record.file_url,
+    record.dataUrl,
+    record.resultUrls,
+    record.result_urls,
+    record.imageUrls,
+    record.image_urls,
+    record.urls,
+    record.images,
+    record.base64 ? `data:${record.mimeType || 'image/png'};base64,${record.base64}` : '',
+  ].flatMap(readImageUrls)
+  return uniqueUrls(urls)
 }
 
 export function getFirstImageResultUrl(record?: Pick<ImageRecord, 'resultUrls' | 'result_urls'> | null) {
@@ -37,13 +82,15 @@ export function getFirstImageResultUrl(record?: Pick<ImageRecord, 'resultUrls' |
 }
 
 export function getImageUrl(record?: ImageUrlSource | null) {
-  if (!record) return ''
-  return record.url || record.dataUrl || getFirstImageResultUrl(record) || (record.base64 ? `data:${record.mimeType || 'image/png'};base64,${record.base64}` : '')
+  return getImageUrls(record)[0] || ''
 }
 
 export function getImageKey(record?: ImageKeySource | null) {
   if (!record) return ''
-  return String(record.id || record.taskId || record.url || record.dataUrl || getFirstImageResultUrl(record) || '')
+  const firstUrl = getImageUrl(record)
+  const id = record.id || record.taskId
+  if (id && firstUrl) return `${id}:${firstUrl}`
+  return String(id || firstUrl || '')
 }
 
 export function truncatePrompt(prompt = '', maxLength = 20) {

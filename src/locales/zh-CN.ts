@@ -62,6 +62,7 @@ export default {
     emptyTitle: '任务等待区已准备就绪',
     emptyDescription: '在左侧输入提示词，选择生成参数和图片数量，然后点击“开始生成”。您可以连续提交多个任务！',
     copyPrompt: '复用提示词',
+    generationExpired: '本次生图任务已超时，请重新发起生成。',
   },
   referenceUploader: {
     dropTitle: '点击、拖拽或粘贴图片到此处',

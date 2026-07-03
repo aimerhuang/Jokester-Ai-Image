@@ -62,6 +62,7 @@ export default {
     emptyTitle: 'Your next image will appear here.',
     emptyDescription: 'Start with a prompt and generate something new.',
     copyPrompt: 'Reuse Prompt',
+    generationExpired: 'This generation task has expired. Please start again.',
   },
   referenceUploader: {
     dropTitle: 'Click, drag, or paste images here',

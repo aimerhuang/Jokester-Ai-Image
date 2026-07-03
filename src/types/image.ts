@@ -68,10 +68,18 @@ export interface GeneratedImageResult {
   quality?: string
   mimeType?: string
   url?: string
+  imageUrl?: string
+  image_url?: string
+  fileUrl?: string
+  file_url?: string
   base64?: string
   dataUrl?: string
-  resultUrls?: string[]
-  result_urls?: string[]
+  resultUrls?: string[] | string
+  result_urls?: string[] | string
+  imageUrls?: string[] | string
+  image_urls?: string[] | string
+  urls?: string[] | string
+  images?: Array<string | { url?: string; imageUrl?: string; image_url?: string; fileUrl?: string; file_url?: string }> | string
   status?: string | number
   errorMessage?: string
   revisedPrompt?: string
