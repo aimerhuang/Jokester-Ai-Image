@@ -1,15 +1,18 @@
 import { http } from './http'
 import type { PageQuery, PageResult } from '@/types/api'
-import type { CreateImageTaskRequest, ImageParameterApiOption, ImageParametersResponse, ImageRecord } from '@/types/image'
-
-interface NanoBananaImageRequest {
-  prompt: string
-  modelName?: string
-  resolutionCode: string
-  aspectRatioCode: string
-  imageCount: number
-  imageUrls: string[]
-}
+import type {
+  AiImagePointPrice,
+  CreateImageTaskRequest,
+  GeneratedImageResult,
+  ImageParameterApiOption,
+  ImageParametersResponse,
+  ImageRecord,
+  ImageTaskCreationResult,
+  NanoBananaImageRequest,
+  ResolveImageParametersRequest,
+  ResolveImageParametersResponse,
+  UploadReferenceImageResult,
+} from '@/types/image'
 
 export function getImageParameters() {
   return http.get<unknown, ImageParametersResponse>('/ai/images/parameters')
@@ -20,49 +23,62 @@ export function getImageModels() {
 }
 
 export function getPricingOptions() {
-  return http.get<unknown, unknown>('/ai/images/pricing-options')
+  return http.get<unknown, AiImagePointPrice[]>('/ai/images/pricing-options')
 }
 
-export function resolveImageParameters(payload: Partial<CreateImageTaskRequest>) {
-  return http.post<unknown, unknown>('/ai/images/parameters/resolve', payload)
+export function resolveImageParameters(payload: ResolveImageParametersRequest) {
+  return http.post<unknown, ResolveImageParametersResponse>('/ai/images/parameters/resolve', payload)
 }
 
 export function generateImage(payload: CreateImageTaskRequest) {
-  if (isNanoBananaModel(payload.modelName)) {
-    return generateNanoBananaImage(payload)
-  }
-
-  return createImageTask(payload)
+  return isNanoBananaModel(payload.modelCode)
+    ? createNanoBananaImageTask(toNanoBananaRequest(payload))
+    : createImageTask(payload)
 }
 
-export function generateNanoBananaImage(payload: CreateImageTaskRequest) {
-  const request: NanoBananaImageRequest = {
+export function createImageTask(payload: CreateImageTaskRequest) {
+  return http.post<unknown, ImageTaskCreationResult>('/ai/images', payload)
+}
+
+export function createNanoBananaImageTask(payload: NanoBananaImageRequest) {
+  return http.post<unknown, ImageTaskCreationResult>('/ai/images/nanoBananaImage', payload)
+}
+
+export function generateGptImageDirect(payload: CreateImageTaskRequest) {
+  return http.post<unknown, GeneratedImageResult>('/ai/images/generate', payload)
+}
+
+export function generateNanoBananaImageDirect(payload: NanoBananaImageRequest) {
+  return http.post<unknown, GeneratedImageResult>('/ai/images/nanoBananaImage/generate', payload)
+}
+
+function toNanoBananaRequest(payload: CreateImageTaskRequest): NanoBananaImageRequest {
+  return {
+    idempotencyKey: payload.idempotencyKey,
+    sourcePromptId: payload.sourcePromptId,
     prompt: payload.prompt,
+    modelCode: payload.modelCode,
     modelName: payload.modelName,
     resolutionCode: payload.resolutionCode,
     aspectRatioCode: payload.aspectRatioCode || 'auto',
     imageCount: payload.imageCount,
-    imageUrls: payload.referenceImageUrls || [],
+    imageUrls: payload.referenceImageUrls,
+    imageAssetIds: payload.referenceAssetIds,
   }
-
-  return http.post<unknown, ImageRecord>('/ai/images/nanoBananaImage', request)
 }
 
-export function isNanoBananaModel(modelName: string | undefined) {
-  const normalized = modelName?.toLowerCase().replace(/[\s_-]+/g, '')
+export function isNanoBananaModel(modelCode: string | undefined) {
+  const normalized = modelCode?.toLowerCase().replace(/[\s_-]+/g, '')
   return normalized === 'nanobanana' || normalized === 'nanobanana2' || normalized === 'nanobananapro'
 }
 
-// 后端出图数量上限：Nano Banana(Gemini 2.5 Flash Image) 单次最多 4 张；GPT Image(OpenAI Images API n) 最多 10 张。
-export function getMaxImageCount(modelName: string | undefined) {
-  return isNanoBananaModel(modelName) ? 4 : 10
+// Keep the product-level frontend limit at four images per task.
+export function getMaxImageCount(_modelCode: string | undefined) {
+  return 4
 }
 
-export function createImageTask(payload: CreateImageTaskRequest) {
-  return http.post<unknown, ImageRecord>('/ai/images', payload)
-}
-
-interface ImageRecordsQuery extends PageQuery {
+export interface ImageRecordsQuery extends PageQuery {
+  status?: number
   isFavorite?: boolean
   prompt?: string
   modelName?: string
@@ -71,16 +87,11 @@ interface ImageRecordsQuery extends PageQuery {
 }
 
 export function getImageRecords(params: ImageRecordsQuery) {
-  return http.get<unknown, PageResult<ImageRecord> | ImageRecord[]>('/ai/images', { params })
+  return http.get<unknown, PageResult<ImageRecord>>('/ai/images', { params })
 }
 
-interface FavoriteImageRecordPayload {
-  imageUrl: string
-  isFavorite: boolean
-}
-
-export function favoriteImageRecord(id: string | number, payload: FavoriteImageRecordPayload) {
-  return http.post<unknown, ImageRecord | { favorite?: boolean; isFavorite?: boolean } | null>(`/ai/images/${id}/favorite`, payload)
+export function favoriteImageRecord(id: string | number, imageUrl: string, isFavorite: boolean) {
+  return http.post<unknown, null>(`/ai/images/${id}/favorite`, { imageUrl, isFavorite })
 }
 
 export function getImageRecord(id: string | number) {
@@ -93,6 +104,6 @@ export function deleteImageRecord(id: string | number) {
 
 export function uploadReferenceImage(file: File) {
   const form = new FormData()
-  form.append('File', file)
-  return http.post<unknown, { url: string }>('/ai/images/upload', form)
+  form.append('file', file)
+  return http.post<unknown, UploadReferenceImageResult>('/ai/images/upload', form)
 }

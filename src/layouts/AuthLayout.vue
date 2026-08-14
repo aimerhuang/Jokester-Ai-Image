@@ -9,6 +9,7 @@
         </div>
       </header>
       <router-view />
+      <LegalLinks class="auth-layout__legal" />
     </section>
     <aside class="auth-layout__visual">
       <div class="visual-card page-card">
@@ -27,6 +28,7 @@
 
 <script setup lang="ts">
 import AppLogo from '@/components/common/AppLogo.vue'
+import LegalLinks from '@/components/common/LegalLinks.vue'
 import LocaleToggle from '@/components/common/LocaleToggle.vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import { useAppStore } from '@/stores/app'
@@ -44,6 +46,7 @@ const carouselImages = [slide1, slide2, slide3, slide4]
 .auth-layout__panel { display: flex; flex-direction: column; gap: 56px; }
 .auth-layout__topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .auth-layout__actions { display: flex; align-items: center; gap: 10px; }
+.auth-layout__legal { margin-top: auto; }
 .auth-layout__visual { display: grid; place-items: center; }
 .visual-card { width: min(560px, 100%); padding: 36px; }
 .visual-card span { display: inline-flex; padding: 8px 14px; border-radius: 999px; background: var(--color-primary-soft); color: var(--color-primary-hover); font-weight: 700; }

@@ -1,38 +1,76 @@
 export interface UserProfile {
-  id?: number | string
-  email: string
-  username?: string
-  displayName?: string
-  avatarUrl?: string
-  credits?: number
+  id: number
+  userName: string
+  nickName: string
+  email?: string | null
+  avatarUrl?: string | null
+  signature?: string | null
+  pointBalance: number
+  isSuperAdmin: boolean
+}
+
+export interface SiteAccess {
+  id: number
+  siteCode: string
+  siteName: string
 }
 
 export interface LoginRequest {
-  username: string
+  userName: string
   password: string
 }
 
 export interface LoginResult {
+  sessionId?: string | null
   accessToken: string
-  refreshToken?: string
-  expiresIn?: number
-  user?: UserProfile
+  refreshToken: string
+  accessTokenExpiresAt: string
+  refreshTokenExpiresAt?: string
+  user: UserProfile
+  sites: SiteAccess[]
+  permissions: string[]
 }
 
 export interface RegisterRequest {
-  email: string
-  username: string
-  nickname: string
+  userName: string
+  nickName: string
   password: string
-  EmailCode: string
+  email: string
+  emailCode: string
+  acceptedPrivacyPolicy: true
+  privacyPolicyVersion: string
+  acceptedTermsOfService: true
+  termsOfServiceVersion: string
+  clientPlatform: 'web'
+  locale: string
+}
+
+export interface RegisterResult {
+  userId: number
+}
+
+export interface CaptchaChallenge {
+  captchaId: string
+  imageBase64: string
+  mimeType: string
+  expiresInSeconds: number
+}
+
+export interface SendRegisterEmailCodeRequest {
+  email: string
+  captchaId: string
+  captchaAnswer: string
+}
+
+export interface SendEmailCodeResult {
+  retryAfterSeconds: number
 }
 
 export interface ChangePasswordRequest {
-  oldPassword: string
-  newPassword: string
+  password: string
 }
 
 export interface UpdateNicknameRequest {
-  nickname: string
-  username: string
+  userName: string
+  nickName: string
 }

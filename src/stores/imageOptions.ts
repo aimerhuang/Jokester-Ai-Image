@@ -19,6 +19,7 @@ const localizedLabels: Record<ImageOptionCategory, Record<string, Record<Locale,
     high: { 'zh-CN': 'High(高精细)', 'en-US': 'High(High Detail)' },
   },
   aspectRatios: {
+    auto: { 'zh-CN': '自动', 'en-US': 'Auto' },
     '1:1': { 'zh-CN': '1:1(方形)', 'en-US': '1:1(Square)' },
     '16:9': { 'zh-CN': '16:9(横屏)', 'en-US': '16:9(Landscape)' },
     '9:16': { 'zh-CN': '9:16(竖屏)', 'en-US': '9:16(Portrait)' },
@@ -32,21 +33,23 @@ const localizedLabels: Record<ImageOptionCategory, Record<string, Record<Locale,
 
 function getOptionValue(option: ImageParameterApiOption | ImageParameterOption | string | undefined) {
   if (typeof option === 'string') return option
-  return option?.value || option?.code || option?.providerValue || option?.name || option?.label || ''
+  if (!option) return ''
+  if ('value' in option && option.value) return option.value
+  return option.code || option.providerValue || option.name || ('label' in option ? option.label : '') || ''
 }
 
-function normalizeOptions(options: ImageParameterApiOption[] | undefined): ImageParameterOption[] | undefined {
+function normalizeOptions(options: ImageParameterApiOption[] | undefined): ImageParameterOption[] {
   return [...(options || [])]
     .sort((a, b) => (a.sort || 0) - (b.sort || 0))
-    .map((item) => ({ ...item, label: item.label || item.name || getOptionValue(item), value: getOptionValue(item) }))
+    .map((item) => ({ ...item, label: item.name || getOptionValue(item), value: getOptionValue(item) }))
 }
 
-function normalizeModelOptions(options: ImageParameterApiOption[] | undefined): ImageParameterOption[] | undefined {
+function normalizeModelOptions(options: ImageParameterApiOption[] | undefined): ImageParameterOption[] {
   return [...(options || [])]
     .sort((a, b) => (a.sort || 0) - (b.sort || 0))
     .map((item) => ({
       ...item,
-      label: item.name || item.label || getOptionValue(item),
+      label: item.name || getOptionValue(item),
       value: item.code || getOptionValue(item),
     }))
 }
@@ -59,19 +62,25 @@ export function getLocalizedImageOptionLabel(category: ImageOptionCategory, opti
 
 export const fallbackImageParameters: ImageParameters = {
   models: [],
-  resolutions: ['1k', '2k', '4k'].map((value) => ({ label: value.toUpperCase(), value })),
+  resolutions: ['1k', '4k'].map((value) => ({ label: value.toUpperCase(), value })),
   qualities: ['low', 'med', 'high'].map((value) => ({ label: value, value })),
   aspectRatios: ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9'].map((value) => ({ label: value, value })),
+  pointPrices: [],
 }
 
 function normalizeImageParameters(parameters: ImageParametersResponse): ImageParameters {
+  const resolutions = normalizeOptions(parameters.resolutions)
+  const qualities = normalizeOptions(parameters.qualities)
+  const aspectRatios = normalizeOptions(parameters.aspectRatios)
+
   return {
     ...fallbackImageParameters,
     ...parameters,
-    models: normalizeOptions(parameters.models) || fallbackImageParameters.models,
-    resolutions: normalizeOptions(parameters.resolutions) || fallbackImageParameters.resolutions,
-    qualities: normalizeOptions(parameters.qualities) || fallbackImageParameters.qualities,
-    aspectRatios: normalizeOptions(parameters.aspectRatios) || fallbackImageParameters.aspectRatios,
+    models: fallbackImageParameters.models,
+    resolutions: resolutions.length ? resolutions : fallbackImageParameters.resolutions,
+    qualities: qualities.length ? qualities : fallbackImageParameters.qualities,
+    aspectRatios: aspectRatios.length ? aspectRatios : fallbackImageParameters.aspectRatios,
+    pointPrices: parameters.pointPrices || [],
   }
 }
 
@@ -82,11 +91,18 @@ export const useImageOptionsStore = defineStore('imageOptions', () => {
   async function fetchOptions() {
     loading.value = true
     try {
-      const [parameters, models] = await Promise.all([getImageParameters(), getImageModels()])
+      const [parametersResult, modelsResult] = await Promise.allSettled([getImageParameters(), getImageModels()])
+      const normalizedParameters = parametersResult.status === 'fulfilled'
+        ? normalizeImageParameters(parametersResult.value)
+        : options.value
+      const modelOptions = modelsResult.status === 'fulfilled'
+        ? normalizeModelOptions(modelsResult.value)
+        : options.value.models
       options.value = {
-        ...normalizeImageParameters(parameters),
-        models: normalizeModelOptions(models) || fallbackImageParameters.models,
+        ...normalizedParameters,
+        models: modelOptions,
       }
+      if (modelsResult.status === 'rejected') throw modelsResult.reason
     } finally {
       loading.value = false
     }

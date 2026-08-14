@@ -1,47 +1,83 @@
 export interface CreditSummary {
   balance: number
-  checkedInToday?: boolean
+  checkedInToday: boolean
+  todaySignInPoints: number
 }
 
 export interface PointBalanceResponse {
-  balance?: number | string
-  points?: number | string
-  point?: number | string
-  credits?: number | string
-  credit?: number | string
-  userPoints?: number | string
-  currentPoints?: number | string
-  totalPoints?: number | string
-  pointBalance?: number | string
-  currentPoint?: number | string
-  availablePoints?: number | string
-  pointTotal?: number | string
-  score?: number | string
-  checkedInToday?: boolean | number | string
-  isCheckedInToday?: boolean | number | string
-  signedInToday?: boolean | number | string
-  isSignedInToday?: boolean | number | string
-  todayCheckedIn?: boolean | number | string
-  hasSignedInToday?: boolean | number | string
-  isSignIn?: boolean | number | string
-  isSignedIn?: boolean | number | string
-  signed?: boolean | number | string
-  checkedIn?: boolean | number | string
-  hasCheckIn?: boolean | number | string
-  hasCheckedIn?: boolean | number | string
+  availablePoints: number
+  hasSignedInToday: boolean
+  todaySignInPoints: number
 }
 
-export interface SignInResult extends PointBalanceResponse {
-  rewardPoints?: number
-  amount?: number
-  message?: string
+export interface SignInResult {
+  points: number
+  expireAt: string
+  availablePoints: number
+}
+
+export interface UserPointDetail {
+  id: number
+  userId: number
+  changePoints: number
+  balanceAfter: number
+  changeType: string
+  source: string
+  remark?: string | null
+  createdAt: string
 }
 
 export interface CreditRecord {
-  id: number | string
+  id: number
   type: string
   amount: number
-  description?: string
+  description: string
   date: string
-  balance?: number
+  balance: number
+}
+
+export interface RechargePackage {
+  code: string
+  name: string
+  description?: string | null
+  points: number
+  priceAmount: number
+  currency: string
+  validityDays?: number | null
+  bonusPercent: number
+  badgeCode?: string | null
+  isFeatured: boolean
+  isFirstPurchaseEligible: boolean
+  purchaseEnabled: boolean
+  benefits: string[]
+}
+
+export interface RechargeOrder {
+  orderNo: string
+  packageCode: string
+  points: number
+  priceAmount: number
+  currency: string
+  status: number
+  purchaseUrl?: string | null
+  expiresAt: string
+  createdAt: string
+}
+
+export interface RedeemPointCodeResult {
+  addedPoints: number
+  availablePoints: number
+  redeemedAt: string
+}
+
+export interface IssuePointCodesRequest {
+  points: number
+  count: number
+  expiresAt?: string
+}
+
+export interface IssuedPointCodesResult {
+  packageCode?: string | null
+  points: number
+  codes: string[]
 }

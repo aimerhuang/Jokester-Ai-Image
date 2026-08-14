@@ -67,6 +67,7 @@ import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { uploadReferenceImage } from '@/services/aiImages'
 import { useAppStore } from '@/stores/app'
+import { resolveMediaUrl } from '@/utils/authenticatedMedia'
 import type { ApiError } from '@/types/api'
 
 interface ReferenceImageItem {
@@ -74,12 +75,14 @@ interface ReferenceImageItem {
   file?: File
   previewUrl: string
   url: string
+  assetId: string
   uploading: boolean
 }
 
 const props = withDefaults(defineProps<{ initialUrls?: string[] }>(), { initialUrls: () => [] })
 const emit = defineEmits<{
   change: [urls: string[]]
+  'asset-ids-change': [assetIds: string[]]
   'uploading-change': [uploading: boolean]
 }>()
 const maxCount = 6
@@ -98,11 +101,23 @@ watch(
   (urls) => {
     const incoming = urls.filter((url) => url && !items.value.some((item) => item.url === url))
     if (!incoming.length) return
-    items.value.push(...incoming.map((url) => ({ id: nextId++, previewUrl: url, url, uploading: false })))
-    emitUrls()
+    void addInitialUrls(incoming)
   },
   { immediate: true },
 )
+
+async function addInitialUrls(urls: string[]) {
+  const resolved = await Promise.all(urls.map(async (url) => {
+    try {
+      const media = await resolveMediaUrl(url)
+      return { id: nextId++, previewUrl: media.url, url, assetId: '', uploading: false }
+    } catch {
+      return { id: nextId++, previewUrl: '', url, assetId: '', uploading: false }
+    }
+  }))
+  items.value.push(...resolved)
+  emitUrls()
+}
 
 function openFileDialog() {
   inputRef.value?.click()
@@ -148,6 +163,7 @@ async function addFiles(files: File[]) {
       file,
       previewUrl: URL.createObjectURL(file),
       url: '',
+      assetId: '',
       uploading: true,
     }
     items.value.push(item)
@@ -164,7 +180,10 @@ async function uploadItem(item: ReferenceImageItem) {
   try {
     const result = await uploadReferenceImage(item.file)
     const current = items.value.find((value) => value.id === item.id)
-    if (current) current.url = result.url
+    if (current) {
+      current.assetId = result.assetId
+      current.url = result.url
+    }
   } catch (error) {
     ElMessage.error((error as ApiError).message || app.t('referenceUploader.uploadFailed'))
     shouldRemove = true
@@ -189,7 +208,8 @@ function removeItem(id: number) {
 }
 
 function emitUrls() {
-  emit('change', items.value.map((item) => item.url).filter(Boolean))
+  emit('change', items.value.filter((item) => !item.assetId).map((item) => item.url).filter(Boolean))
+  emit('asset-ids-change', items.value.map((item) => item.assetId).filter(Boolean))
 }
 
 onBeforeUnmount(() => {

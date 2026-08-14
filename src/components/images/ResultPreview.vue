@@ -15,17 +15,50 @@
         </div>
       </div>
     </div>
-    <img v-else-if="imageUrl" :src="imageUrl" alt="Generated image" />
+    <div v-else-if="displayImageUrl" class="result-images">
+      <img :src="displayImageUrl" alt="Generated image" />
+      <div v-if="displayImageUrls.length > 1" class="thumbnail-strip" role="list" aria-label="Generated images">
+        <button
+          v-for="(url, index) in displayImageUrls"
+          :key="sourceImageUrls[index] || url"
+          class="thumbnail-button"
+          :class="{ active: index === currentIndex }"
+          type="button"
+          role="listitem"
+          @click="selectImage(index)"
+        >
+          <img :src="url" :alt="`Generated image ${index + 1}`" />
+        </button>
+      </div>
+    </div>
     <EmptyState v-else :title="emptyTitle" :description="emptyDescription" />
-    <div v-if="imageUrl" class="actions"><slot /></div>
+    <div v-if="sourceImageUrls.length" class="actions"><slot /></div>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import { useAuthenticatedImageUrls } from '@/composables/useAuthenticatedImageUrls'
 
-const props = defineProps<{ title: string; loadingText: string; emptyTitle: string; emptyDescription: string; imageUrl?: string; loading?: boolean }>()
+const props = defineProps<{
+  title: string
+  loadingText: string
+  emptyTitle: string
+  emptyDescription: string
+  imageUrl?: string
+  imageUrls?: string[]
+  selectedIndex?: number
+  loading?: boolean
+}>()
+const emit = defineEmits<{ 'update:selectedIndex': [index: number] }>()
+const sourceImageUrls = computed(() => {
+  const urls = props.imageUrls?.filter(Boolean) || []
+  return [...new Set(urls.length ? urls : props.imageUrl ? [props.imageUrl] : [])]
+})
+const { urls: displayImageUrls } = useAuthenticatedImageUrls(sourceImageUrls)
+const currentIndex = computed(() => Math.min(Math.max(props.selectedIndex || 0, 0), Math.max(displayImageUrls.value.length - 1, 0)))
+const displayImageUrl = computed(() => displayImageUrls.value[currentIndex.value] || '')
 
 const PROGRESS_DURATION = 60_000
 const progress = ref(1)
@@ -50,6 +83,10 @@ watch(() => props.loading, (loading) => {
 }, { immediate: true })
 
 onUnmounted(stopProgress)
+
+function selectImage(index: number) {
+  emit('update:selectedIndex', index)
+}
 
 function startProgress() {
   stopProgress()
@@ -76,7 +113,12 @@ function stopProgress() {
 <style scoped>
 .preview { padding: 24px; min-height: 560px; display: flex; flex-direction: column; gap: 18px; }
 h2 { margin: 0; font-size: 22px; }
-img { width: 100%; max-height: 680px; object-fit: contain; border-radius: var(--radius-lg); background: var(--color-primary-soft); }
+.result-images { display: grid; gap: 12px; min-height: 0; }
+.result-images > img { width: 100%; max-height: 680px; object-fit: contain; border-radius: var(--radius-lg); background: var(--color-primary-soft); }
+.thumbnail-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 96px)); gap: 10px; }
+.thumbnail-button { padding: 0; overflow: hidden; border: 2px solid transparent; border-radius: var(--radius-sm); background: var(--color-primary-soft); cursor: pointer; }
+.thumbnail-button.active { border-color: var(--color-primary); box-shadow: var(--shadow-primary); }
+.thumbnail-button img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
 .loading-box {
   flex: 1;
   min-height: 360px;

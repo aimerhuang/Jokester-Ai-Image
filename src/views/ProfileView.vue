@@ -1,10 +1,10 @@
 <template>
   <div>
     <section class="profile-card page-card">
-      <el-avatar :size="92" :src="avatarSrc">{{ auth.user?.email?.[0]?.toUpperCase() }}</el-avatar>
+      <el-avatar :size="92" :src="avatarSrc">{{ auth.user?.userName?.[0]?.toUpperCase() }}</el-avatar>
       <div class="profile-summary">
         <strong>{{ nickname }}</strong>
-        <span>{{ auth.user?.email || 'user@example.com' }}</span>
+        <span>{{ auth.user?.userName || '-' }}</span>
         <span>{{ app.t('profile.currentCredits') }}: {{ credits.summary.balance }}</span>
       </div>
       <el-upload :auto-upload="false" accept="image/png,image/jpeg,image/webp" :show-file-list="false" :on-change="upload"><el-button>{{ app.t('profile.avatar') }}</el-button></el-upload>
@@ -17,8 +17,7 @@
       </el-form>
       <el-divider />
       <el-form :model="passwordForm" label-position="top">
-        <el-form-item :label="app.t('auth.password')"><el-input v-model="passwordForm.oldPassword" type="password" show-password /></el-form-item>
-        <el-form-item :label="app.t('profile.changePassword')"><el-input v-model="passwordForm.newPassword" type="password" show-password /></el-form-item>
+        <el-form-item :label="app.t('profile.newPassword')"><el-input v-model="passwordForm.password" type="password" show-password autocomplete="new-password" /></el-form-item>
         <el-button type="primary" @click="changePassword">{{ app.t('common.save') }}</el-button>
         <el-button @click="logout">{{ app.t('common.logout') }}</el-button>
       </el-form>
@@ -42,21 +41,20 @@ const credits = useCreditsStore()
 const router = useRouter()
 const nicknameSaving = ref(false)
 const nicknameForm = reactive({ displayName: '' })
-const passwordForm = reactive({ oldPassword: '', newPassword: '' })
-const nickname = computed(() => auth.user?.displayName || auth.user?.username || auth.user?.email || '-')
+const passwordForm = reactive({ password: '' })
+const nickname = computed(() => auth.user?.nickName || auth.user?.userName || '-')
 const avatarSrc = computed(() => normalizeAvatarUrl(auth.user?.avatarUrl))
 
-function normalizeAvatarUrl(url?: string) {
+function normalizeAvatarUrl(url?: string | null) {
   if (!url) return ''
   if (/^(https?:)?\/\//i.test(url) || url.startsWith('data:') || url.startsWith('blob:')) return url
-  if (url.startsWith('/api/')) return url
-  return `/api${url.startsWith('/') ? url : `/${url}`}`
+  return url.startsWith('/') ? url : `/${url}`
 }
 
 watch(
-  () => auth.user?.displayName,
-  (displayName) => {
-    nicknameForm.displayName = displayName || ''
+  () => auth.user?.nickName,
+  (nickName) => {
+    nicknameForm.displayName = nickName || ''
   },
   { immediate: true },
 )
@@ -82,9 +80,10 @@ async function changeNickname() {
   if (!displayName) return ElMessage.warning(app.t('profile.nicknameRequired'))
   nicknameSaving.value = true
   try {
-    await updateNickname(auth.user.id, { nickname: displayName, username: displayName })
-    await auth.fetchCurrentUser()
+    await updateNickname(auth.user.id, { nickName: displayName, userName: auth.user.userName })
     ElMessage.success(app.t('profile.nicknameUpdated'))
+    auth.clearSession()
+    await router.push('/login')
   } catch (error) {
     ElMessage.error((error as ApiError).message)
   } finally {
@@ -94,9 +93,12 @@ async function changeNickname() {
 
 async function changePassword() {
   if (!auth.user?.id) return
+  if (!passwordForm.password) return ElMessage.warning(app.t('profile.passwordRequired'))
   try {
     await updatePassword(auth.user.id, passwordForm)
     ElMessage.success(app.t('common.save'))
+    auth.clearSession()
+    await router.push('/login')
   } catch (error) {
     ElMessage.error((error as ApiError).message)
   }

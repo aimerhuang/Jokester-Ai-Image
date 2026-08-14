@@ -5,3 +5,5 @@ dist/
 *.log
 .env
 *.local.json
+test-results/
+playwright-report/

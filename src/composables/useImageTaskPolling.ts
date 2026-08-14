@@ -3,13 +3,16 @@ import { ElMessage } from 'element-plus'
 import { getImageRecord } from '@/services/aiImages'
 import { getImageUrl } from '@/utils/imageActions'
 import type { ApiError } from '@/types/api'
-import type { GeneratedImageResult, ImageRecord } from '@/types/image'
+import type { GeneratedImageResult, ImageRecord, ImageTaskCreationResult } from '@/types/image'
 
 const POLLING_INTERVAL_MS = 3000
+const MIN_POLLING_INTERVAL_MS = 1000
+const MAX_POLLING_INTERVAL_MS = 30000
+const MAX_TIMER_DELAY_MS = 2_147_000_000
 const PENDING_TASK_STORAGE_KEY = 'pendingAiImageTaskId'
 const PENDING_TASK_STORAGE_VERSION = 1
 
-type ImageTaskSnapshot = GeneratedImageResult | ImageRecord
+type ImageTaskSnapshot = GeneratedImageResult | ImageRecord | ImageTaskCreationResult
 
 interface UseImageTaskPollingOptions {
   onUpdate: (task: ImageTaskSnapshot) => void
@@ -30,7 +33,7 @@ interface PendingTaskPayload extends StartPollingOptions {
 
 export function useImageTaskPolling(options: UseImageTaskPollingOptions) {
   const polling = ref(false)
-  let timer: ReturnType<typeof setInterval> | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
   let expirationTimer: ReturnType<typeof setTimeout> | null = null
   let activeTaskId: string | null = null
 
@@ -48,9 +51,6 @@ export function useImageTaskPolling(options: UseImageTaskPollingOptions) {
     scheduleExpiration(taskId, startOptions.expiresAt)
 
     void fetchTask(taskId)
-    timer = window.setInterval(() => {
-      void fetchTask(taskId)
-    }, POLLING_INTERVAL_MS)
   }
 
   function resumePending() {
@@ -67,7 +67,7 @@ export function useImageTaskPolling(options: UseImageTaskPollingOptions) {
 
   function stop(clearPending = true) {
     if (timer) {
-      window.clearInterval(timer)
+      window.clearTimeout(timer)
       timer = null
     }
     if (expirationTimer) {
@@ -75,8 +75,8 @@ export function useImageTaskPolling(options: UseImageTaskPollingOptions) {
       expirationTimer = null
     }
     polling.value = false
+    activeTaskId = null
     if (clearPending) {
-      activeTaskId = null
       localStorage.removeItem(PENDING_TASK_STORAGE_KEY)
     }
   }
@@ -84,13 +84,18 @@ export function useImageTaskPolling(options: UseImageTaskPollingOptions) {
   function scheduleExpiration(taskId: string | number, expiresAt: number | undefined) {
     if (typeof expiresAt !== 'number') return
 
+    if (expirationTimer) {
+      window.clearTimeout(expirationTimer)
+      expirationTimer = null
+    }
+
     const remainingMs = expiresAt - Date.now()
     if (remainingMs <= 0) {
       expireTask(taskId)
       return
     }
 
-    expirationTimer = window.setTimeout(() => expireTask(taskId), remainingMs)
+    expirationTimer = window.setTimeout(() => expireTask(taskId), Math.min(remainingMs, MAX_TIMER_DELAY_MS))
   }
 
   function expireTask(taskId: string | number) {
@@ -106,7 +111,12 @@ export function useImageTaskPolling(options: UseImageTaskPollingOptions) {
       if (activeTaskId !== String(taskId)) return
       options.onUpdate(task)
 
-      if (isProcessing(task)) return
+      if (isProcessing(task)) {
+        const serverExpiresAt = parseExpiresAt(task.expiresAt)
+        if (serverExpiresAt) scheduleExpiration(taskId, serverExpiresAt)
+        scheduleNext(taskId, task.pollAfterSeconds)
+        return
+      }
 
       stop()
       if (isSuccess(task)) {
@@ -117,8 +127,22 @@ export function useImageTaskPolling(options: UseImageTaskPollingOptions) {
       options.onFailure?.(task)
       ElMessage.error(task.errorMessage || 'Image generation failed')
     } catch (error) {
+      if (activeTaskId === String(taskId)) scheduleNext(taskId, (error as ApiError).retryAfterSeconds)
       ElMessage.error((error as ApiError).message)
     }
+  }
+
+  function scheduleNext(taskId: string | number, pollAfterSeconds?: number) {
+    if (activeTaskId !== String(taskId)) return
+    if (timer) window.clearTimeout(timer)
+    const requestedMs = Number(pollAfterSeconds) * 1000
+    const delay = Number.isFinite(requestedMs) && requestedMs > 0
+      ? Math.min(MAX_POLLING_INTERVAL_MS, Math.max(MIN_POLLING_INTERVAL_MS, requestedMs))
+      : POLLING_INTERVAL_MS
+    timer = window.setTimeout(() => {
+      timer = null
+      void fetchTask(taskId)
+    }, delay)
   }
 
   function handleInitialResult(task: ImageTaskSnapshot, startOptions: StartPollingOptions = {}) {
@@ -126,7 +150,10 @@ export function useImageTaskPolling(options: UseImageTaskPollingOptions) {
 
     const taskId = getTaskId(task)
     if (taskId && shouldPollInitialResult(task)) {
-      start(taskId, startOptions)
+      start(taskId, {
+        ...startOptions,
+        expiresAt: parseExpiresAt(task.expiresAt) || startOptions.expiresAt,
+      })
       return
     }
 
@@ -193,15 +220,33 @@ export function getTaskId(task: ImageTaskSnapshot) {
 }
 
 export function isProcessing(task: ImageTaskSnapshot) {
-  return Number(task.status) === 0
+  const status = normalizeTaskStatus(task)
+  return status === 'queued' || status === 'processing'
 }
 
 export function isSuccess(task: ImageTaskSnapshot) {
-  return Number(task.status) === 1 || Boolean(getImageUrl(task))
+  return normalizeTaskStatus(task) === 'succeeded'
+    || (task.status === undefined && task.statusCode === undefined && Boolean(getImageUrl(task)))
 }
 
 export function isFailure(task: ImageTaskSnapshot) {
-  return Number(task.status) === 2
+  const status = normalizeTaskStatus(task)
+  return status === 'failed' || status === 'cancelled'
+}
+
+function normalizeTaskStatus(task: ImageTaskSnapshot) {
+  const rawStatus = task.status ?? task.statusCode
+  if (typeof rawStatus === 'string') return rawStatus.trim().toLowerCase()
+  if (rawStatus === 0 || rawStatus === 3) return 'processing'
+  if (rawStatus === 1) return 'succeeded'
+  if (rawStatus === 2) return 'failed'
+  return ''
+}
+
+function parseExpiresAt(expiresAt: string | undefined) {
+  if (!expiresAt) return undefined
+  const value = Date.parse(expiresAt)
+  return Number.isNaN(value) ? undefined : value
 }
 
 function isExpired(expiresAt: number | undefined) {

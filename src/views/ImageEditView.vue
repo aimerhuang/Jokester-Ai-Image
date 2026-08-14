@@ -30,10 +30,10 @@
               v-for="(url, index) in imageUrls"
               :key="url"
               class="thumbnail-button"
-              :class="{ active: url === imageUrl }"
+              :class="{ active: index === selectedIndex }"
               type="button"
               role="listitem"
-              @click="selectedUrl = url"
+              @click="selectedIndex = index"
             >
               <img :src="url" :alt="`Generated image ${index + 1}`" @error="hideBrokenThumbnail" />
               <span>{{ index + 1 }}</span>
@@ -83,6 +83,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import EmptyState from '@/components/common/EmptyState.vue'
+import { useAuthenticatedImageUrls } from '@/composables/useAuthenticatedImageUrls'
 import { favoriteImageRecord, getImageRecord } from '@/services/aiImages'
 import { useAppStore } from '@/stores/app'
 import { downloadImage, getImageUrls, saveReuseConfig } from '@/utils/imageActions'
@@ -96,12 +97,14 @@ const record = ref<ImageRecord | null>(null)
 const prompt = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
-const selectedUrl = ref('')
-const imageUrls = computed(() => getImageUrls(record.value))
-const imageUrl = computed(() => selectedUrl.value || imageUrls.value[0] || '')
-const selectedIndex = computed(() => Math.max(0, imageUrls.value.indexOf(imageUrl.value)))
-const referenceImages = computed(() => record.value?.referenceImageUrls || [])
-const favorite = computed(() => record.value ? Boolean(record.value.favorite || record.value.isFavorite) : false)
+const selectedIndex = ref(0)
+const sourceImageUrls = computed(() => getImageUrls(record.value))
+const { urls: imageUrls } = useAuthenticatedImageUrls(sourceImageUrls)
+const imageUrl = computed(() => imageUrls.value[selectedIndex.value] || '')
+const sourceImageUrl = computed(() => sourceImageUrls.value[selectedIndex.value] || '')
+const sourceReferenceImages = computed(() => record.value?.referenceImageUrls || [])
+const { urls: referenceImages } = useAuthenticatedImageUrls(sourceReferenceImages)
+const favorite = computed(() => Boolean(record.value?.favoriteUrls?.includes(sourceImageUrl.value)))
 
 onMounted(async () => {
   loading.value = true
@@ -119,9 +122,10 @@ onMounted(async () => {
 })
 
 function selectInitialImage() {
-  const urls = imageUrls.value
+  const urls = sourceImageUrls.value
   const queryUrl = typeof route.query.url === 'string' ? route.query.url : ''
-  selectedUrl.value = (queryUrl && urls.includes(queryUrl)) ? queryUrl : urls[0] || queryUrl || ''
+  const queryIndex = queryUrl ? urls.indexOf(queryUrl) : -1
+  selectedIndex.value = queryIndex >= 0 ? queryIndex : 0
 }
 
 async function copyPrompt() {
@@ -139,7 +143,7 @@ function hideBrokenThumbnail(event: Event) {
 }
 
 function downloadCurrent() {
-  downloadImage(imageUrl.value, `image-${record.value?.id || globalThis.crypto?.randomUUID?.() || 'generated'}.png`)
+  downloadImage(sourceImageUrl.value, `image-${record.value?.id || globalThis.crypto?.randomUUID?.() || 'generated'}.png`)
 }
 
 async function toggleFavorite() {
@@ -147,26 +151,24 @@ async function toggleFavorite() {
   const currentRecord = record.value
   const id = currentRecord.id || currentRecord.taskId
   if (!id) return ElMessage.warning(app.t('gallery.missingImageId'))
-  const url = imageUrl.value
+  const url = sourceImageUrl.value
   if (!url) return ElMessage.warning(app.t('gallery.missingImageUrl'))
 
-  const next = !Boolean(currentRecord.favorite || currentRecord.isFavorite)
-  currentRecord.favorite = next
-  currentRecord.isFavorite = next
+  const next = !currentRecord.favoriteUrls.includes(url)
+  const previousFavoriteUrls = [...currentRecord.favoriteUrls]
+  currentRecord.favoriteUrls = next
+    ? [...new Set([...previousFavoriteUrls, url])]
+    : previousFavoriteUrls.filter((item) => item !== url)
+  currentRecord.isFavorite = currentRecord.favoriteUrls.length > 0
+  currentRecord.favorite = currentRecord.isFavorite
 
   try {
-    const updated = await favoriteImageRecord(id, { imageUrl: url, isFavorite: next })
-    if (updated && typeof updated === 'object') {
-      const serverFavorite = updated.isFavorite ?? updated.favorite
-      if (typeof serverFavorite === 'boolean') {
-        currentRecord.favorite = serverFavorite
-        currentRecord.isFavorite = serverFavorite
-      }
-    }
-    ElMessage.success((currentRecord.favorite || currentRecord.isFavorite) ? app.t('gallery.favoriteAdded') : app.t('gallery.favoriteRemoved'))
+    await favoriteImageRecord(id, url, next)
+    ElMessage.success(app.t(next ? 'gallery.favoriteAdded' : 'gallery.favoriteRemoved'))
   } catch (error) {
-    currentRecord.favorite = !next
-    currentRecord.isFavorite = !next
+    currentRecord.favoriteUrls = previousFavoriteUrls
+    currentRecord.isFavorite = previousFavoriteUrls.length > 0
+    currentRecord.favorite = currentRecord.isFavorite
     ElMessage.error((error as ApiError).message)
   }
 }
@@ -196,7 +198,7 @@ async function usePrompt() {
 }
 
 function useAsReference() {
-  const url = imageUrl.value
+  const url = sourceImageUrl.value
   if (!url) return
   const config = currentConfig() || { prompt: prompt.value }
   saveReuseConfig({ ...config, referenceImageUrls: [url] })

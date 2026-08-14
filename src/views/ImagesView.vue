@@ -27,28 +27,33 @@
     </section>
 
     <el-skeleton v-if="loading" :rows="8" animated />
-    <EmptyState v-else-if="!records.length" :title="app.t('gallery.emptyTitle')" :description="app.t('gallery.emptyDescription')">
-      <el-button type="primary" @click="router.push('/playground')">{{ app.t('common.generate') }}</el-button>
+    <EmptyState
+      v-else-if="!galleryItems.length"
+      :title="app.t(hasActiveFilters ? 'gallery.noMatchedTitle' : 'gallery.emptyTitle')"
+      :description="app.t(hasActiveFilters ? 'gallery.noMatchedDescription' : 'gallery.emptyDescription')"
+    >
+      <el-button v-if="!hasActiveFilters" type="primary" @click="router.push('/playground')">{{ app.t('common.generate') }}</el-button>
     </EmptyState>
-    <EmptyState v-else-if="!filteredRecords.length" :title="app.t('gallery.noMatchedTitle')" :description="app.t('gallery.noMatchedDescription')" />
     <template v-else>
       <div class="grid">
         <ImageCard
-          v-for="record in pagedRecords"
-          :key="getImageKey(record)"
-          :record="record"
-          :favorite="Boolean(record.favorite || record.isFavorite)"
-          @preview="preview"
-          @delete="remove"
-          @favorite="toggleFavorite"
+          v-for="item in galleryItems"
+          :key="item.key"
+          :record="item.record"
+          :image-source-url="item.imageUrl"
+          :favorite="item.favorite"
+          @preview="preview(item.record, item.imageUrl)"
+          @delete="remove(item.record)"
+          @favorite="toggleFavorite(item.record, item.imageUrl)"
           @fullscreen="openFullscreen"
         />
       </div>
       <el-pagination
         v-model:current-page="pageIndex"
         :page-size="pageSize"
-        :total="filteredRecords.length"
+        :total="total"
         layout="prev, pager, next"
+        @current-change="fetchList"
       />
     </template>
 
@@ -65,7 +70,7 @@ import ImageCard from '@/components/images/ImageCard.vue'
 import { deleteImageRecord, favoriteImageRecord, getImageRecords } from '@/services/aiImages'
 import { useAppStore } from '@/stores/app'
 import { useImageOptionsStore } from '@/stores/imageOptions'
-import { getImageKey, getImageUrl } from '@/utils/imageActions'
+import { getImageUrls } from '@/utils/imageActions'
 import type { ApiError } from '@/types/api'
 import type { ImageRecord } from '@/types/image'
 
@@ -75,6 +80,7 @@ const app = useAppStore()
 const router = useRouter()
 const optionsStore = useImageOptionsStore()
 const records = ref<ImageRecord[]>([])
+const total = ref(0)
 const pageIndex = ref(1)
 const pageSize = ref(12)
 const loading = ref(false)
@@ -88,12 +94,16 @@ const filters = reactive<{ model: string; dates: [string, string] | null; favori
 })
 
 const modelOptions = computed(() => optionsStore.options.models || [])
-const filteredRecords = computed(() => records.value)
-const pagedRecords = computed(() => {
-  const start = (pageIndex.value - 1) * pageSize.value
-  return filteredRecords.value.slice(start, start + pageSize.value)
-})
-
+const hasActiveFilters = computed(() => Boolean(searchKeyword.value.trim() || filters.model || filters.dates || filters.favorite === 'favorite'))
+const galleryItems = computed(() => records.value.flatMap((record) => {
+  const urls = filters.favorite === 'favorite' ? record.favoriteUrls : getImageUrls(record)
+  return [...new Set(urls)].map((imageUrl) => ({
+    key: `${record.id}:${imageUrl}`,
+    record,
+    imageUrl,
+    favorite: record.favoriteUrls.includes(imageUrl),
+  }))
+}))
 watch(filters, () => {
   pageIndex.value = 1
   void fetchList()
@@ -101,10 +111,6 @@ watch(filters, () => {
 watch(searchKeyword, () => {
   pageIndex.value = 1
   void fetchList()
-})
-watch(filteredRecords, () => {
-  const maxPage = Math.max(1, Math.ceil(filteredRecords.value.length / pageSize.value))
-  if (pageIndex.value > maxPage) pageIndex.value = maxPage
 })
 
 onMounted(() => {
@@ -117,19 +123,16 @@ async function fetchList() {
   try {
     const [startDate, endDate] = filters.dates || []
     const result = await getImageRecords({
-      pageIndex: 1,
-      pageSize: 200,
+      pageIndex: pageIndex.value,
+      pageSize: pageSize.value,
       prompt: searchKeyword.value.trim() || undefined,
       isFavorite: filters.favorite === 'favorite' ? true : undefined,
       startDate,
       endDate,
       modelName: filters.model || undefined,
     })
-    if (Array.isArray(result)) {
-      records.value = result
-    } else {
-      records.value = result.items
-    }
+    records.value = result.items
+    total.value = result.total
   } catch (error) {
     ElMessage.error((error as ApiError).message)
   } finally {
@@ -141,35 +144,31 @@ function applySearch() {
   searchKeyword.value = searchDraft.value
 }
 
-function preview(record: ImageRecord) {
+function preview(record: ImageRecord, imageUrl: string) {
   const id = record.id || record.taskId
   if (!id) return
-  const imageUrl = getImageUrl(record)
   router.push({ path: `/images/${id}/edit`, query: imageUrl ? { url: imageUrl } : undefined })
 }
 
-async function toggleFavorite(record: ImageRecord) {
+async function toggleFavorite(record: ImageRecord, imageUrl: string) {
   if (!record.id) return ElMessage.warning(app.t('gallery.missingImageId'))
-  const imageUrl = getImageUrl(record)
   if (!imageUrl) return ElMessage.warning(app.t('gallery.missingImageUrl'))
 
-  const next = !Boolean(record.favorite || record.isFavorite)
-  record.favorite = next
-  record.isFavorite = next
+  const next = !record.favoriteUrls?.includes(imageUrl)
+  const previousFavoriteUrls = [...(record.favoriteUrls || [])]
+  record.favoriteUrls = next
+    ? [...new Set([...previousFavoriteUrls, imageUrl])]
+    : previousFavoriteUrls.filter((url) => url !== imageUrl)
+  record.isFavorite = record.favoriteUrls.length > 0
+  record.favorite = record.isFavorite
 
   try {
-    const updated = await favoriteImageRecord(record.id, { imageUrl, isFavorite: next })
-    if (updated && typeof updated === 'object') {
-      const serverFavorite = updated.isFavorite ?? updated.favorite
-      if (typeof serverFavorite === 'boolean') {
-        record.favorite = serverFavorite
-        record.isFavorite = serverFavorite
-      }
-    }
-    ElMessage.success((record.favorite || record.isFavorite) ? app.t('gallery.favoriteAdded') : app.t('gallery.favoriteRemoved'))
+    await favoriteImageRecord(record.id, imageUrl, next)
+    ElMessage.success(app.t(next ? 'gallery.favoriteAdded' : 'gallery.favoriteRemoved'))
   } catch (error) {
-    record.favorite = !next
-    record.isFavorite = !next
+    record.favoriteUrls = previousFavoriteUrls
+    record.isFavorite = previousFavoriteUrls.length > 0
+    record.favorite = record.isFavorite
     ElMessage.error((error as ApiError).message)
   }
 }
@@ -180,9 +179,14 @@ function openFullscreen(url: string) {
 
 async function remove(record: ImageRecord) {
   if (!record.id) return ElMessage.warning(app.t('gallery.missingImageId'))
-  await ElMessageBox.confirm(app.t('common.delete'), app.t('common.confirm'))
-  await deleteImageRecord(record.id)
-  await fetchList()
+  try {
+    await ElMessageBox.confirm(app.t('common.delete'), app.t('common.confirm'))
+    await deleteImageRecord(record.id)
+    if (records.value.length === 1 && pageIndex.value > 1) pageIndex.value -= 1
+    await fetchList()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error((error as ApiError).message)
+  }
 }
 </script>
 

@@ -3,13 +3,16 @@
     <aside class="sidebar page-card">
       <AppLogo />
       <nav>
-        <router-link v-for="item in navItems" :key="item.to" :to="item.to">{{ app.t(item.label) }}</router-link>
+        <router-link v-for="item in visibleNavItems" :key="item.to" :to="item.to">{{ app.t(item.label) }}</router-link>
       </nav>
-      <div class="account-card">
-        <strong class="account-trigger" @click="openSettings">{{ nickname }}</strong>
-        <button class="settings-link" type="button" @click="openSettings">{{ app.t('profile.clickSettings') }}</button>
-        <span>{{ app.t('profile.currentCredits') }}: {{ credits.summary.balance }}</span>
-        <el-button class="logout-button" text @click="handleLogout">{{ app.t('common.logout') }}</el-button>
+      <div class="sidebar-footer">
+        <LegalLinks />
+        <div class="account-card">
+          <strong class="account-trigger" @click="openSettings">{{ nickname }}</strong>
+          <button class="settings-link" type="button" @click="openSettings">{{ app.t('profile.clickSettings') }}</button>
+          <span>{{ app.t('profile.currentCredits') }}: {{ credits.summary.balance }}</span>
+          <el-button class="logout-button" text @click="handleLogout">{{ app.t('common.logout') }}</el-button>
+        </div>
       </div>
     </aside>
 
@@ -24,6 +27,10 @@
           <el-button type="primary" class="soft-button" :loading="credits.signingIn" :disabled="credits.summary.checkedInToday" @click="checkIn">
             {{ credits.summary.checkedInToday ? app.t('credits.checkedInToday') : app.t('credits.checkIn') }}
           </el-button>
+          <el-button type="primary" class="soft-button recharge-entry" @click="router.push({ name: 'recharge' })">
+            <el-icon><Coin /></el-icon>
+            <span>{{ credits.summary.balance }} | {{ app.t('recharge.entry') }}</span>
+          </el-button>
           <LocaleToggle />
           <ThemeToggle />
         </div>
@@ -34,7 +41,8 @@
     <el-drawer v-model="drawer" size="280px" direction="ltr">
       <div class="drawer-content">
         <AppLogo />
-        <router-link v-for="item in navItems" :key="item.to" :to="item.to" @click="drawer = false">{{ app.t(item.label) }}</router-link>
+        <router-link v-for="item in visibleNavItems" :key="item.to" :to="item.to" @click="drawer = false">{{ app.t(item.label) }}</router-link>
+        <LegalLinks class="drawer-legal" />
       </div>
     </el-drawer>
 
@@ -74,10 +82,7 @@
     <el-dialog v-model="passwordVisible" :title="app.t('profile.modifyPassword')" width="420px" @closed="handleEditClosed">
       <el-form :model="passwordForm" label-position="top" @submit.prevent>
         <el-form-item :label="app.t('auth.password')">
-          <el-input v-model="passwordForm.oldPassword" type="password" show-password autocomplete="current-password" />
-        </el-form-item>
-        <el-form-item :label="app.t('profile.newPassword')">
-          <el-input v-model="passwordForm.newPassword" type="password" show-password autocomplete="new-password" />
+          <el-input v-model="passwordForm.password" type="password" show-password autocomplete="new-password" />
         </el-form-item>
         <el-form-item :label="app.t('auth.confirmPassword')">
           <el-input v-model="passwordForm.confirmPassword" type="password" show-password autocomplete="new-password" />
@@ -93,9 +98,11 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { Coin } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import AppLogo from '@/components/common/AppLogo.vue'
+import LegalLinks from '@/components/common/LegalLinks.vue'
 import LocaleToggle from '@/components/common/LocaleToggle.vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import { updateNickname, updatePassword } from '@/services/user'
@@ -116,22 +123,25 @@ const passwordVisible = ref(false)
 const nicknameSaving = ref(false)
 const passwordSaving = ref(false)
 const nicknameForm = reactive({ displayName: '' })
-const passwordForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' })
-const nickname = computed(() => auth.user?.displayName || auth.user?.username || auth.user?.email || '-')
-const accountName = computed(() => auth.user?.email || auth.user?.username || 'user@example.com')
+const passwordForm = reactive({ password: '', confirmPassword: '' })
+const nickname = computed(() => auth.user?.nickName || auth.user?.userName || '-')
+const accountName = computed(() => auth.user?.userName || '-')
 const pageTitle = computed(() => app.t(String(route.meta.titleKey || 'app.name')))
 const pageSubtitle = computed(() => route.meta.subtitleKey ? app.t(String(route.meta.subtitleKey)) : '')
 
 const navItems = [
   { to: '/playground', label: 'nav.playground' },
+  { to: '/prompts', label: 'nav.promptLibrary' },
   { to: '/images', label: 'nav.gallery' },
   { to: '/credits', label: 'nav.credits' },
   { to: '/pricing', label: 'nav.pricing' },
+  { to: '/admin/redeem-codes', label: 'nav.codeGenerator', superAdminOnly: true },
   { to: '/profile', label: 'nav.profile' },
 ]
+const visibleNavItems = computed(() => navItems.filter((item) => !item.superAdminOnly || auth.user?.isSuperAdmin))
 
 onMounted(() => {
-  auth.fetchCurrentUser().catch(() => undefined)
+  auth.ensureCurrentUser().catch(() => undefined)
   credits.fetchSummary().catch(() => undefined)
 })
 
@@ -140,14 +150,13 @@ function openSettings() {
 }
 
 function openNicknameDialog() {
-  nicknameForm.displayName = auth.user?.displayName || ''
+  nicknameForm.displayName = auth.user?.nickName || ''
   settingsVisible.value = false
   nicknameVisible.value = true
 }
 
 function openPasswordDialog() {
-  passwordForm.oldPassword = ''
-  passwordForm.newPassword = ''
+  passwordForm.password = ''
   passwordForm.confirmPassword = ''
   settingsVisible.value = false
   passwordVisible.value = true
@@ -157,21 +166,17 @@ function handleEditClosed() {
   settingsVisible.value = true
 }
 
-async function refreshUserInfo() {
-  await auth.fetchCurrentUser().catch(() => undefined)
-  await credits.fetchSummary().catch(() => undefined)
-}
-
 async function saveNickname() {
   if (!auth.user?.id) return
   const displayName = nicknameForm.displayName.trim()
   if (!displayName) return ElMessage.warning(app.t('profile.nicknameRequired'))
   nicknameSaving.value = true
   try {
-    await updateNickname(auth.user.id, { nickname: displayName, username: displayName })
-    await refreshUserInfo()
+    await updateNickname(auth.user.id, { nickName: displayName, userName: auth.user.userName })
     ElMessage.success(app.t('profile.nicknameUpdated'))
     nicknameVisible.value = false
+    auth.clearSession()
+    await router.push('/login')
   } catch (error) {
     ElMessage.error((error as ApiError).message)
   } finally {
@@ -181,13 +186,15 @@ async function saveNickname() {
 
 async function savePassword() {
   if (!auth.user?.id) return
-  if (!passwordForm.newPassword) return ElMessage.warning(app.t('profile.passwordRequired'))
-  if (passwordForm.newPassword !== passwordForm.confirmPassword) return ElMessage.warning(app.t('auth.confirmPassword'))
+  if (!passwordForm.password) return ElMessage.warning(app.t('profile.passwordRequired'))
+  if (passwordForm.password !== passwordForm.confirmPassword) return ElMessage.warning(app.t('auth.confirmPassword'))
   passwordSaving.value = true
   try {
-    await updatePassword(auth.user.id, passwordForm)
+    await updatePassword(auth.user.id, { password: passwordForm.password })
     ElMessage.success(app.t('profile.passwordUpdated'))
     passwordVisible.value = false
+    auth.clearSession()
+    await router.push('/login')
   } catch (error) {
     ElMessage.error((error as ApiError).message)
   } finally {
@@ -216,7 +223,8 @@ async function handleLogout() {
 nav, .drawer-content { display: grid; gap: 8px; }
 a { padding: 12px 14px; border-radius: var(--radius-md); color: var(--color-text-muted); font-weight: 600; }
 a.router-link-active { background: var(--color-primary-soft); color: var(--color-primary-hover); }
-.account-card { margin-top: auto; padding: 14px; border-radius: var(--radius-md); background: var(--color-primary-soft); display: grid; gap: 4px; }
+.sidebar-footer { margin-top: auto; display: grid; gap: 12px; }
+.account-card { padding: 14px; border-radius: var(--radius-md); background: var(--color-primary-soft); display: grid; gap: 4px; }
 .account-card span { color: var(--color-text-muted); font-size: 13px; }
 .account-trigger { cursor: pointer; }
 .settings-link { width: fit-content; padding: 0; border: 0; background: transparent; color: var(--color-primary-hover); font-size: 12px; cursor: pointer; }
@@ -231,7 +239,10 @@ a.router-link-active { background: var(--color-primary-soft); color: var(--color
 .topbar-title h1 { margin: 0; font-size: clamp(28px, 4vw, 40px); line-height: 1.08; }
 .topbar-title p { margin: 10px 0 0; color: var(--color-text-muted); }
 .topbar-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.recharge-entry { white-space: nowrap; }
 .mobile-menu { display: none; margin-right: auto; }
 .drawer-content { padding: 8px; }
-@media (max-width: 900px) { .app-layout { grid-template-columns: 1fr; padding: 16px 16px 88px; } .sidebar { display: none; } .mobile-menu { display: inline-flex; } .topbar { gap: 8px; flex-wrap: wrap; min-height: 0; } .topbar-title { order: 3; width: 100%; } }
+.drawer-legal { margin-top: 18px; padding: 12px 14px; border-top: 1px solid var(--color-border); }
+@media (max-width: 900px) { .app-layout { grid-template-columns: 1fr; padding: 16px 16px 88px; } .sidebar { display: none; } .mobile-menu { display: inline-flex; } .topbar { gap: 8px; flex-wrap: wrap; min-height: 0; } .topbar-title { order: 3; width: 100%; } .topbar-actions { flex-wrap: wrap; justify-content: flex-end; } }
+@media (max-width: 560px) { .topbar-actions { width: 100%; justify-content: flex-start; margin-left: 0; } }
 </style>

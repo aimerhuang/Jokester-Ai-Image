@@ -42,11 +42,12 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useAuthenticatedImageUrl } from '@/composables/useAuthenticatedImageUrls'
 import { useAppStore } from '@/stores/app'
 import { downloadImage, formatImageDate, getImageUrl, truncatePrompt } from '@/utils/imageActions'
 import type { ImageRecord } from '@/types/image'
 
-const props = defineProps<{ record: ImageRecord; favorite?: boolean }>()
+const props = defineProps<{ record: ImageRecord; imageSourceUrl?: string; favorite?: boolean }>()
 defineEmits<{
   preview: [record: ImageRecord]
   delete: [record: ImageRecord]
@@ -55,13 +56,14 @@ defineEmits<{
 }>()
 
 const app = useAppStore()
-const imageUrl = computed(() => getImageUrl(props.record))
+const sourceImageUrl = computed(() => props.imageSourceUrl || getImageUrl(props.record))
+const { url: imageUrl } = useAuthenticatedImageUrl(sourceImageUrl)
 const meta = computed(() => `${props.record.modelName || '-'} / ${props.record.resolutionCode || '-'} / ${props.record.qualityCode || '-'}`)
 const shortPrompt = computed(() => truncatePrompt(props.record.prompt, 20))
 const createdDate = computed(() => formatImageDate(props.record.createdAt))
 
 function download() {
-  downloadImage(imageUrl.value, `image-${props.record.id || globalThis.crypto?.randomUUID?.() || 'generated'}.png`)
+  downloadImage(sourceImageUrl.value, `image-${props.record.id || globalThis.crypto?.randomUUID?.() || 'generated'}.png`)
 }
 </script>
 

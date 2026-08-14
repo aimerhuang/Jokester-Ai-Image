@@ -1,10 +1,12 @@
 import type { ImageRecord } from '@/types/image'
+import { fetchMediaBlob, isAuthenticatedMediaUrl } from '@/utils/authenticatedMedia'
 
 export const FAVORITES_STORAGE_KEY = 'jokester:image:favorites'
 export const REUSE_CONFIG_STORAGE_KEY = 'jokester:image:reuse-config'
 
 export interface ReuseImageConfig {
   prompt?: string
+  sourcePromptId?: number
   modelName?: string
   resolutionCode?: string
   qualityCode?: string
@@ -12,8 +14,24 @@ export interface ReuseImageConfig {
   referenceImageUrls?: string[]
 }
 
-type ImageUrlSource = Pick<ImageRecord, 'url' | 'imageUrl' | 'image_url' | 'fileUrl' | 'file_url' | 'dataUrl' | 'resultUrls' | 'result_urls' | 'imageUrls' | 'image_urls' | 'urls' | 'images' | 'base64' | 'mimeType'>
-type ImageKeySource = Pick<ImageRecord, 'id' | 'taskId' | 'url' | 'imageUrl' | 'image_url' | 'fileUrl' | 'file_url' | 'dataUrl' | 'resultUrls' | 'result_urls' | 'imageUrls' | 'image_urls' | 'urls' | 'images'>
+type ImageUrlSource = {
+  url?: string
+  imageUrl?: string
+  image_url?: string
+  fileUrl?: string
+  file_url?: string
+  dataUrl?: string
+  resultUrls?: string[] | string
+  result_urls?: string[] | string
+  imageUrls?: string[] | string
+  image_urls?: string[] | string
+  urls?: string[] | string
+  images?: Array<string | ImageUrlObject> | string
+  assets?: Array<string | ImageUrlObject> | string
+  base64?: string
+  mimeType?: string
+}
+type ImageKeySource = ImageUrlSource & { id?: number | string; taskId?: number | string }
 
 type ImageUrlObject = { url?: unknown; imageUrl?: unknown; image_url?: unknown; fileUrl?: unknown; file_url?: unknown }
 
@@ -71,14 +89,15 @@ export function getImageUrls(record?: ImageUrlSource | null) {
     record.image_urls,
     record.urls,
     record.images,
+    record.assets,
     record.base64 ? `data:${record.mimeType || 'image/png'};base64,${record.base64}` : '',
   ].flatMap(readImageUrls)
   return uniqueUrls(urls)
 }
 
-export function getFirstImageResultUrl(record?: Pick<ImageRecord, 'resultUrls' | 'result_urls'> | null) {
+export function getFirstImageResultUrl(record?: { resultUrls?: string[] | string; result_urls?: string[] | string; assets?: Array<string | ImageUrlObject> | string } | null) {
   if (!record) return ''
-  return readFirstResultUrl(record.resultUrls) || readFirstResultUrl(record.result_urls)
+  return readFirstResultUrl(record.resultUrls) || readFirstResultUrl(record.result_urls) || readFirstResultUrl(record.assets)
 }
 
 export function getImageUrl(record?: ImageUrlSource | null) {
@@ -134,16 +153,17 @@ export function toggleRecordFavorite(record: ImageRecord) {
 }
 
 export async function downloadImage(url: string, filename = 'generated-image.png') {
-  if (!url) return
+  if (!url) return false
 
   try {
-    const response = await fetch(url)
-    const blob = await response.blob()
+    const blob = await fetchMediaBlob(url)
     const objectUrl = URL.createObjectURL(blob)
     triggerDownload(objectUrl, filename)
     URL.revokeObjectURL(objectUrl)
+    return true
   } catch {
-    triggerDownload(url, filename)
+    if (!isAuthenticatedMediaUrl(url)) triggerDownload(url, filename)
+    return false
   }
 }
 
