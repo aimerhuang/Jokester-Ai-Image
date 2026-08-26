@@ -1,4 +1,4 @@
-# Jokester AI Image
+# Jo AI Image
 
 Vue 3 + Vite + TypeScript 前端，用于 AI 生图、图库、积分和账号管理。
 
@@ -28,9 +28,9 @@ npm run dev
 Vite 开发代理会把 `/api`、`/ai-images`、`/avatar` 和 `/nano-banana2-images` 转发到 `VITE_API_PROXY_TARGET`（默认 `http://localhost:5049`）。
 提示词封面在本地开发时由 `VITE_PROMPT_IMAGE_ROOT` 只读提供；如果已有独立静态图片服务，可改用 `VITE_PROMPT_IMAGE_PROXY_TARGET`，代理配置优先于本地目录。
 
-## 使用 pm2 启动前端
+## 使用 pm2 常驻开发服务器
 
-如果你想让前端常驻运行，可以使用项目根目录下的 [ecosystem.config.cjs](ecosystem.config.cjs)：
+项目根目录下的 [ecosystem.config.cjs](ecosystem.config.cjs) 会通过 PM2 常驻运行绑定到 `0.0.0.0` 的 Vite 开发服务器：
 
 ```bash
 pm2 start ecosystem.config.cjs
@@ -44,13 +44,26 @@ pm2 stop jokester-ai-image
 pm2 delete jokester-ai-image
 ```
 
+这不是生产部署配置，Vite 端口也没有固定。生产环境应执行 `npm run build`，用静态服务器托管 `dist/`，并另外配置 SPA history fallback 和 API 反向代理。
+
 ## 常用命令
 
 ```bash
 npm run dev      # 启动开发服务器
 npm run build    # 类型检查并构建生产包
 npm run preview  # 预览生产构建
+npm run test:e2e:ai-size # 运行尺寸模式定向 E2E
 ```
+
+首次运行浏览器测试前安装 Chromium：
+
+```bash
+npx playwright install chromium
+```
+
+`npm run test:e2e` 运行全部浏览器用例；日常改动应优先执行与受影响流程对应的定向脚本。
+
+生图工作台以模型 catalog 为权威：GPT explicit 分辨率固定展示为 `1K、2K、4K`，同时支持两种尺寸模式时显示“自定义尺寸/自动尺寸”；auto 下隐藏分辨率和画幅比例。前端不会仅凭全局参数目录补出模型未声明的能力。
 
 ## 主要路由
 
@@ -61,22 +74,24 @@ npm run preview  # 预览生产构建
 - `/prompts`：提示词库、搜索、复制和用于创作
 - `/images/:id/edit`：图片详情、复用参数、收藏、下载
 - `/credits`：积分明细
-- `/pricing`：积分套餐展示
+- `/pricing`：生图模型、分辨率和画质的积分定价
 - `/recharge`：积分充值、创建订单和兑换充值卡密
-- `/admin/redeem-codes`：超级管理员按积分面值批量签发兑换码
+- `/admin/redeem-codes`：超级管理员按动态套餐或自定义积分批量签发兑换码
 - `/profile`：头像、昵称、密码和登出
 
 ## 法律文档
 
 - `/legal/privacy/index.html`：隐私政策静态页面
 - `/legal/terms/index.html`：服务条款静态页面
+- `/legal/ai-processing/index.html`：AI 数据处理告知静态页面
 
-源文件位于 `public/legal/`，`npm run build` 后会原样进入 `dist/legal/`。注册页从 `GET /api/legal/documents/current?platform=web&locale=zh-CN` 读取当前版本和 URL，登录、注册及登录后侧栏也提供同源法律页面入口。部署时必须先发布静态页面，再按后端 runbook 配置同一版本的绝对 HTTPS URL。
+源文件位于 `public/legal/`，`npm run build` 后会原样进入 `dist/legal/`。法律页面和 `GET /api/legal/documents/current?platform=web&locale=zh-CN` 与注册参数、注册校验解耦；注册只提交邮箱、邮箱验证码和密码。部署时仍须先发布静态页面，再按后端 runbook 配置同一版本的绝对 HTTPS URL。
 
-第三方 AI 数据处理告知当前不发布。后端返回 `aiProcessingNotice=null` 时注册仍可使用，但生图必须保持不可用；不能由前端隐藏错误或绕过服务端检查。
+第三方 AI 数据处理告知已加入当前未提交工作区并进入本地生产构建，但公网静态页面及后端文档版本配置仍需在部署时验证。该告知不参与注册；用户首次生图缺少当前 Provider 授权时，后端返回 `AI_CONSENT_REQUIRED`，前端展示告知并在用户确认后记录授权、自动重试原任务。告知缺失时仍由服务端 fail-closed，前端不得绕过。
 
 ## 文档
 
 - [API 集成指南](integration-guide.md)
 - [前端开发任务书](前端开发任务书.md)
 - [视觉设计方案](视觉设计方案.md)
+- [积分套餐与跨端改造 PRD](point-package-frontend-prd.md)（跨端评审输入；本仓库只实现 Web）

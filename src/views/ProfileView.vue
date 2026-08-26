@@ -3,7 +3,10 @@
     <section class="profile-card page-card">
       <el-avatar :size="92" :src="avatarSrc">{{ auth.user?.userName?.[0]?.toUpperCase() }}</el-avatar>
       <div class="profile-summary">
-        <strong>{{ nickname }}</strong>
+        <div class="profile-name">
+          <strong>{{ nickname }}</strong>
+          <MonthlyVipBadge :membership="auth.user?.membership" />
+        </div>
         <span>{{ auth.user?.userName || '-' }}</span>
         <span>{{ app.t('profile.currentCredits') }}: {{ credits.summary.balance }}</span>
       </div>
@@ -29,6 +32,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, type UploadFile } from 'element-plus'
 import { useRouter } from 'vue-router'
+import MonthlyVipBadge from '@/components/common/MonthlyVipBadge.vue'
 import { updateNickname, updatePassword, uploadAvatar } from '@/services/user'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -113,5 +117,7 @@ async function logout() {
 <style scoped>
 .profile-card { max-width: 620px; padding: 28px; display: grid; gap: 18px; }
 .profile-summary { display: grid; gap: 6px; }
-span { color: var(--color-text-muted); }
+.profile-name { min-width: 0; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.profile-name strong { overflow-wrap: anywhere; }
+.profile-summary > span { color: var(--color-text-muted); }
 </style>

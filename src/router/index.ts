@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import AuthLayout from '@/layouts/AuthLayout.vue'
 import AppLayout from '@/layouts/AppLayout.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useCreditsStore } from '@/stores/credits'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -41,24 +42,42 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
-  if (to.meta.requiresAuth && !auth.isAuthenticated) return { name: 'login', query: { redirect: to.fullPath } }
+  const credits = useCreditsStore()
+  if (to.meta.requiresAuth && !auth.isAuthenticated) {
+    credits.activateForUser(null)
+    return { name: 'login', query: { redirect: to.fullPath } }
+  }
   if (to.meta.requiresAuth) {
+    const requestToken = auth.token
     try {
       await auth.ensureCurrentUser()
+      if (!auth.isAuthenticated || !auth.user) {
+        credits.activateForUser(null)
+        return { name: 'login', query: { redirect: to.fullPath } }
+      }
+      credits.activateForUser(auth.user.id, auth.user.pointBalance)
     } catch {
-      auth.clearSession()
-      return { name: 'login', query: { redirect: to.fullPath } }
+      if (auth.token === requestToken) auth.clearSession()
+      credits.activateForUser(auth.user?.id ?? null)
+      if (!auth.isAuthenticated || !auth.user) {
+        return { name: 'login', query: { redirect: to.fullPath } }
+      }
     }
   }
+  if (!auth.isAuthenticated) credits.activateForUser(null)
   if (to.meta.requiresSuperAdmin && !auth.user?.isSuperAdmin) return { name: 'playground' }
   if ((to.name === 'login' || to.name === 'register') && auth.isAuthenticated) return { name: 'playground' }
   return true
 })
 
-window.addEventListener('auth:expired', () => {
+window.addEventListener('auth:expired', (event) => {
   const auth = useAuthStore()
+  const credits = useCreditsStore()
+  const expiredToken = (event as CustomEvent<{ accessToken?: string | null }>).detail?.accessToken
+  if (expiredToken && auth.token !== expiredToken) return
   auth.clearSession()
-  if (router.currentRoute.value.name !== 'login') router.push({ name: 'login' })
+  credits.activateForUser(null)
+  if (router.currentRoute.value.name !== 'login') void router.replace({ name: 'login' })
 })
 
 export default router

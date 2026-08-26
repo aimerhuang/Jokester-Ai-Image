@@ -10,7 +10,7 @@
     />
 
     <div
-      v-if="!items.length"
+      v-if="!occupiedCount"
       class="empty-dropzone"
       role="button"
       @click="openFileDialog"
@@ -45,7 +45,7 @@
         </button>
       </div>
       <button
-        v-if="items.length < maxCount"
+        v-if="occupiedCount < maxCount"
         class="add-card"
         type="button"
         @click="openFileDialog"
@@ -68,7 +68,6 @@ import { Plus } from '@element-plus/icons-vue'
 import { uploadReferenceImage } from '@/services/aiImages'
 import { useAppStore } from '@/stores/app'
 import { resolveMediaUrl } from '@/utils/authenticatedMedia'
-import type { ApiError } from '@/types/api'
 
 interface ReferenceImageItem {
   id: number
@@ -79,10 +78,19 @@ interface ReferenceImageItem {
   uploading: boolean
 }
 
-const props = withDefaults(defineProps<{ initialUrls?: string[] }>(), { initialUrls: () => [] })
+interface ReferenceImageValue {
+  url: string
+  assetId: string
+}
+
+const props = withDefaults(defineProps<{ initialUrls?: string[]; initialReferences?: ReferenceImageValue[] }>(), {
+  initialUrls: () => [],
+  initialReferences: () => [],
+})
 const emit = defineEmits<{
   change: [urls: string[]]
   'asset-ids-change': [assetIds: string[]]
+  'references-change': [references: ReferenceImageValue[]]
   'uploading-change': [uploading: boolean]
 }>()
 const maxCount = 6
@@ -91,32 +99,67 @@ const allowedTypes = ['image/webp', 'image/jpeg', 'image/png']
 const inputRef = ref<HTMLInputElement>()
 const items = ref<ReferenceImageItem[]>([])
 const dragging = ref(false)
+const pendingReferenceCount = ref(0)
 const uploading = computed(() => items.value.some((item) => item.uploading))
+const occupiedCount = computed(() => items.value.length + pendingReferenceCount.value)
 const app = useAppStore()
 let nextId = 1
+const pendingReferenceKeys = new Set<string>()
 
 watch(uploading, (value) => emit('uploading-change', value), { immediate: true })
 watch(
-  () => props.initialUrls,
-  (urls) => {
-    const incoming = urls.filter((url) => url && !items.value.some((item) => item.url === url))
+  [() => props.initialUrls, () => props.initialReferences],
+  ([urls, references]) => {
+    const knownReferences = references.filter((reference) => reference.url || reference.assetId)
+    const legacyReferences = urls.map((url) => ({ url, assetId: '' }))
+    const knownKeys = new Set([
+      ...items.value.flatMap(referenceKeys),
+      ...pendingReferenceKeys,
+    ])
+    const capacity = Math.max(0, maxCount - occupiedCount.value)
+    let accepted = 0
+    const incoming = [...knownReferences, ...legacyReferences]
+      .filter((reference) => {
+        if (accepted >= capacity) return false
+        const keys = referenceKeys(reference)
+        if (!keys.length || keys.some((key) => knownKeys.has(key))) return false
+        keys.forEach((key) => {
+          knownKeys.add(key)
+          pendingReferenceKeys.add(key)
+        })
+        accepted += 1
+        return true
+      })
     if (!incoming.length) return
-    void addInitialUrls(incoming)
+    pendingReferenceCount.value += incoming.length
+    void addInitialReferences(incoming)
   },
   { immediate: true },
 )
 
-async function addInitialUrls(urls: string[]) {
-  const resolved = await Promise.all(urls.map(async (url) => {
-    try {
-      const media = await resolveMediaUrl(url)
-      return { id: nextId++, previewUrl: media.url, url, assetId: '', uploading: false }
-    } catch {
-      return { id: nextId++, previewUrl: '', url, assetId: '', uploading: false }
-    }
-  }))
-  items.value.push(...resolved)
-  emitUrls()
+async function addInitialReferences(references: ReferenceImageValue[]) {
+  try {
+    const resolved = await Promise.all(references.map(async ({ url, assetId }) => {
+      try {
+        const media = url ? await resolveMediaUrl(url) : null
+        return { id: nextId++, previewUrl: media?.url || '', url, assetId, uploading: false }
+      } catch {
+        return { id: nextId++, previewUrl: '', url, assetId, uploading: false }
+      }
+    }))
+    items.value.push(...resolved)
+    emitUrls()
+  } finally {
+    references.flatMap(referenceKeys).forEach((key) => pendingReferenceKeys.delete(key))
+    pendingReferenceCount.value = Math.max(0, pendingReferenceCount.value - references.length)
+  }
+}
+
+function referenceKeys(reference: Pick<ReferenceImageItem, 'url' | 'assetId'> | ReferenceImageValue) {
+  return [
+    reference.assetId ? `asset:${reference.assetId}` : '',
+    reference.url ? `url:${reference.url}` : '',
+  ].filter(Boolean)
 }
 
 function openFileDialog() {
@@ -143,7 +186,7 @@ function handlePaste(event: ClipboardEvent) {
 
 async function addFiles(files: File[]) {
   for (const file of files) {
-    if (items.value.length >= maxCount) {
+    if (occupiedCount.value >= maxCount) {
       ElMessage.warning(app.t('referenceUploader.maxCountWarning'))
       break
     }
@@ -184,8 +227,8 @@ async function uploadItem(item: ReferenceImageItem) {
       current.assetId = result.assetId
       current.url = result.url
     }
-  } catch (error) {
-    ElMessage.error((error as ApiError).message || app.t('referenceUploader.uploadFailed'))
+  } catch {
+    ElMessage.error(app.t('referenceUploader.uploadFailed'))
     shouldRemove = true
   } finally {
     const current = items.value.find((value) => value.id === item.id)
@@ -210,6 +253,9 @@ function removeItem(id: number) {
 function emitUrls() {
   emit('change', items.value.filter((item) => !item.assetId).map((item) => item.url).filter(Boolean))
   emit('asset-ids-change', items.value.map((item) => item.assetId).filter(Boolean))
+  emit('references-change', items.value
+    .filter((item) => item.url || item.assetId)
+    .map((item) => ({ url: item.url, assetId: item.assetId })))
 }
 
 onBeforeUnmount(() => {

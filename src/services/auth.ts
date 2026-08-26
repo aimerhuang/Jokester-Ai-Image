@@ -1,6 +1,5 @@
 import { http, getStoredRefreshToken } from './http'
 import type {
-  CaptchaChallenge,
   LoginRequest,
   LoginResult,
   RegisterRequest,
@@ -16,10 +15,6 @@ export function login(payload: LoginRequest) {
 
 export function register(payload: RegisterRequest) {
   return http.post<unknown, RegisterResult>('/auth/register', payload)
-}
-
-export function getRegistrationCaptcha() {
-  return http.get<unknown, CaptchaChallenge>('/blog/comments/captcha')
 }
 
 export function sendEmailCode(payload: SendRegisterEmailCodeRequest) {

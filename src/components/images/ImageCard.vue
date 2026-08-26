@@ -2,11 +2,14 @@
   <article class="image-card page-card" @click="$emit('preview', record)">
     <div class="image-shell">
       <img v-if="imageUrl" :src="imageUrl" alt="Generated image" />
-      <div v-else class="placeholder" />
+      <div v-else class="placeholder">
+        <strong>{{ taskStatusText }}</strong>
+      </div>
 
       <div class="hover-layer">
         <div class="top-actions">
           <el-button
+            v-if="imageUrl"
             class="circle-action favorite-action"
             :class="{ 'is-favorite': favorite }"
             circle
@@ -21,7 +24,7 @@
         </div>
         <div class="bottom-meta">
           <span class="date">{{ createdDate }}</span>
-          <div class="quick-actions">
+          <div v-if="imageUrl" class="quick-actions">
             <el-button class="circle-action" circle :title="app.t('gallery.fullscreen')" @click.stop="$emit('fullscreen', imageUrl)">
               <span class="fullscreen-icon" aria-hidden="true" />
             </el-button>
@@ -36,6 +39,10 @@
     <div class="image-card__body">
       <strong>{{ shortPrompt }}</strong>
       <span>{{ meta }}</span>
+      <div v-if="record.pointCost !== undefined || record.billingStatus !== undefined" class="billing-meta">
+        <span>{{ app.t('gallery.pointCost') }}: {{ record.pointCost ?? '-' }}</span>
+        <span>{{ billingStatusText }}</span>
+      </div>
     </div>
   </article>
 </template>
@@ -58,12 +65,50 @@ defineEmits<{
 const app = useAppStore()
 const sourceImageUrl = computed(() => props.imageSourceUrl || getImageUrl(props.record))
 const { url: imageUrl } = useAuthenticatedImageUrl(sourceImageUrl)
-const meta = computed(() => `${props.record.modelName || '-'} / ${props.record.resolutionCode || '-'} / ${props.record.qualityCode || '-'}`)
+const meta = computed(() => [
+  props.record.modelCode || props.record.modelName || '-',
+  taskSizeText.value,
+  props.record.qualityCode || '-',
+].join(' / '))
+const taskSizeText = computed(() => {
+  if (props.record.sizeContractVersion === 'size-mode-v1' && props.record.sizeMode === 'auto') {
+    if (isPositiveDimension(props.record.outputWidth) && isPositiveDimension(props.record.outputHeight)) {
+      return `${props.record.outputWidth}x${props.record.outputHeight}`
+    }
+    return app.t('gallery.autoSizeWaiting')
+  }
+  return props.record.requestedResolutionCode
+    || props.record.resolutionCode
+    || props.record.requestedSize
+    || app.t('gallery.actualSizeUnknown')
+})
 const shortPrompt = computed(() => truncatePrompt(props.record.prompt, 20))
 const createdDate = computed(() => formatImageDate(props.record.createdAt))
+const taskStatusText = computed(() => {
+  const status = String(props.record.status ?? props.record.statusCode ?? '').trim().toLowerCase()
+  if (status === 'queued') return app.t('gallery.taskQueued')
+  if (status === 'processing' || status === '0' || status === '3') return app.t('gallery.taskProcessing')
+  if (status === 'failed' || status === '2') return app.t('gallery.taskFailed')
+  if (status === 'cancelled') return app.t('gallery.taskCancelled')
+  return app.t('gallery.taskPending')
+})
+const billingStatusText = computed(() => {
+  const keys: Record<number, string> = {
+    0: 'gallery.billingReserved',
+    1: 'gallery.billingConfirmed',
+    2: 'gallery.billingPartialRefund',
+    3: 'gallery.billingFullRefundSettled',
+  }
+  const key = keys[Number(props.record.billingStatus)]
+  return key ? app.t(key) : app.t('gallery.billingUnknown')
+})
 
 function download() {
   downloadImage(sourceImageUrl.value, `image-${props.record.id || globalThis.crypto?.randomUUID?.() || 'generated'}.png`)
+}
+
+function isPositiveDimension(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
 </script>
 
@@ -72,6 +117,8 @@ function download() {
 .image-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-card-hover); }
 .image-shell { position: relative; overflow: hidden; background: var(--color-primary-soft); }
 img, .placeholder { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--color-primary-soft); }
+.placeholder { display: grid; place-items: center; padding: 18px; color: var(--color-text-muted); text-align: center; }
+.placeholder strong { white-space: normal; }
 .hover-layer {
   position: absolute;
   inset: 0;
@@ -165,6 +212,8 @@ img, .placeholder { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit
 .fullscreen-icon::before { content: "\26f6"; }
 .download-icon::before { content: "\2193"; }
 .image-card__body { padding: 14px; display: grid; gap: 8px; }
+.billing-meta { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--color-border); }
+.billing-meta span:last-child { text-align: right; }
 strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 span { color: var(--color-text-muted); font-size: 13px; }
 </style>

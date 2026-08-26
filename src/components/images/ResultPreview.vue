@@ -1,35 +1,39 @@
 <template>
   <section class="preview page-card">
     <h2>{{ title }}</h2>
-    <div v-if="displayLoading" class="loading-box" role="status" aria-live="polite">
-      <div class="loading-card">
-        <div class="orb-wrap" aria-hidden="true">
-          <span class="orb orb-primary"></span>
-          <span class="orb orb-secondary"></span>
-          <span class="orb-glow"></span>
-        </div>
-        <strong class="progress-value">{{ progress }}%</strong>
-        <span class="loading-label">{{ loadingText }}</span>
-        <div class="progress-track" :aria-label="`${loadingText} ${progress}%`">
-          <span class="progress-fill" :style="{ width: `${progress}%` }"></span>
-        </div>
-      </div>
-    </div>
-    <div v-else-if="displayImageUrl" class="result-images">
-      <img :src="displayImageUrl" alt="Generated image" />
-      <div v-if="displayImageUrls.length > 1" class="thumbnail-strip" role="list" aria-label="Generated images">
+    <div v-if="showTaskGrid" class="task-grid" :class="{ 'task-grid--single': taskSlots.length === 1 }" aria-live="polite">
+      <article
+        v-for="slot in taskSlots"
+        :key="slot.key"
+        class="task-card"
+        :class="{
+          'task-card--ready': Boolean(slot.displayUrl),
+          'task-card--failed': slot.failed,
+          'task-card--selected': slot.resultIndex === currentIndex,
+        }"
+      >
         <button
-          v-for="(url, index) in displayImageUrls"
-          :key="sourceImageUrls[index] || url"
-          class="thumbnail-button"
-          :class="{ active: index === currentIndex }"
+          v-if="slot.displayUrl"
+          class="result-button"
           type="button"
-          role="listitem"
-          @click="selectImage(index)"
+          :aria-pressed="slot.resultIndex === currentIndex"
+          @click="selectImage(slot.resultIndex)"
         >
-          <img :src="url" :alt="`Generated image ${index + 1}`" />
+          <img :src="slot.displayUrl" :alt="`Generated image ${slot.ordinal}`" />
         </button>
-      </div>
+        <div v-else-if="slot.failed" class="task-state task-state--failed" role="status">
+          <span class="failure-symbol" aria-hidden="true">!</span>
+          <strong>{{ failedText }}</strong>
+        </div>
+        <div v-else class="task-state" role="status">
+          <span class="loading-symbol" aria-hidden="true">&infin;</span>
+          <strong class="progress-value">{{ displayedProgress }}%</strong>
+          <span class="loading-label">{{ loadingText }}</span>
+          <div class="progress-track" :aria-label="`${loadingText} ${displayedProgress}%`">
+            <span class="progress-fill" :style="{ width: `${displayedProgress}%` }"></span>
+          </div>
+        </div>
+      </article>
     </div>
     <EmptyState v-else :title="emptyTitle" :description="emptyDescription" />
     <div v-if="sourceImageUrls.length" class="actions"><slot /></div>
@@ -40,58 +44,99 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { useAuthenticatedImageUrls } from '@/composables/useAuthenticatedImageUrls'
+import type { GeneratedImageBatchItem } from '@/types/image'
 
 const props = defineProps<{
   title: string
   loadingText: string
+  failedText: string
   emptyTitle: string
   emptyDescription: string
   imageUrl?: string
   imageUrls?: string[]
+  items?: GeneratedImageBatchItem[]
+  expectedCount?: number
   selectedIndex?: number
+  progress?: number
   loading?: boolean
 }>()
 const emit = defineEmits<{ 'update:selectedIndex': [index: number] }>()
-const sourceImageUrls = computed(() => {
+
+const orderedItems = computed(() => [...(props.items || [])].sort((left, right) => left.ordinal - right.ordinal))
+const fallbackImageUrls = computed(() => {
   const urls = props.imageUrls?.filter(Boolean) || []
   return [...new Set(urls.length ? urls : props.imageUrl ? [props.imageUrl] : [])]
 })
+const slotCount = computed(() => Math.max(
+  1,
+  Math.min(4, Number(props.expectedCount) || 0),
+  orderedItems.value.length,
+  fallbackImageUrls.value.length,
+))
+const rawSlots = computed(() => Array.from({ length: slotCount.value }, (_, index) => {
+  const item = orderedItems.value.find((candidate) => candidate.ordinal === index + 1) || orderedItems.value[index]
+  const sourceUrl = String(item?.url || fallbackImageUrls.value[index] || '')
+  const status = String(item?.status || '').toLowerCase()
+  return {
+    key: String(item?.taskId || `slot-${index + 1}`),
+    ordinal: index + 1,
+    sourceUrl,
+    failed: status === 'failed' || status === 'cancelled',
+  }
+}))
+const sourceImageUrls = computed(() => [...new Set(rawSlots.value.map((item) => item.sourceUrl).filter(Boolean))])
 const { urls: displayImageUrls } = useAuthenticatedImageUrls(sourceImageUrls)
-const currentIndex = computed(() => Math.min(Math.max(props.selectedIndex || 0, 0), Math.max(displayImageUrls.value.length - 1, 0)))
-const displayImageUrl = computed(() => displayImageUrls.value[currentIndex.value] || '')
+const displayUrlMap = computed(() => new Map(sourceImageUrls.value.map((url, index) => [url, displayImageUrls.value[index] || ''])))
+const taskSlots = computed(() => {
+  let resultIndex = 0
+  return rawSlots.value.map((item) => {
+    const slot = {
+      ...item,
+      displayUrl: item.sourceUrl ? displayUrlMap.value.get(item.sourceUrl) || '' : '',
+      resultIndex: item.sourceUrl ? resultIndex : -1,
+    }
+    if (item.sourceUrl) resultIndex += 1
+    return slot
+  })
+})
+const showTaskGrid = computed(() => Boolean(
+  props.loading
+  || orderedItems.value.length
+  || fallbackImageUrls.value.length,
+))
+const currentIndex = computed(() => Math.min(
+  Math.max(props.selectedIndex || 0, 0),
+  Math.max(sourceImageUrls.value.length - 1, 0),
+))
 
 const PROGRESS_DURATION = 60_000
-const progress = ref(1)
-const displayLoading = computed(() => props.loading || progress.value === 100)
+const simulatedProgress = ref(1)
+const displayedProgress = computed(() => {
+  const rawProgress = Number(props.progress)
+  if (Number.isFinite(rawProgress) && rawProgress > 0) {
+    const percent = rawProgress <= 1 ? rawProgress * 100 : rawProgress
+    return Math.min(99, Math.max(1, Math.round(percent)))
+  }
+  return simulatedProgress.value
+})
 let startedAt = 0
 let timer: number | undefined
 
 watch(() => props.loading, (loading) => {
-  if (loading) {
-    startProgress()
-  } else {
-    stopProgress()
-    if (props.imageUrl) {
-      progress.value = 100
-      window.setTimeout(() => {
-        if (!props.loading) progress.value = 1
-      }, 450)
-    } else {
-      progress.value = 1
-    }
-  }
+  if (loading) startProgress()
+  else stopProgress()
 }, { immediate: true })
 
 onUnmounted(stopProgress)
 
 function selectImage(index: number) {
-  emit('update:selectedIndex', index)
+  if (index >= 0) emit('update:selectedIndex', index)
 }
 
 function startProgress() {
   stopProgress()
   startedAt = Date.now()
-  progress.value = 1
+  simulatedProgress.value = 1
   timer = window.setInterval(updateProgress, 250)
   updateProgress()
 }
@@ -99,119 +144,37 @@ function startProgress() {
 function updateProgress() {
   const elapsed = Date.now() - startedAt
   const ratio = Math.min(elapsed / PROGRESS_DURATION, 1)
-  progress.value = Math.min(98, Math.max(1, Math.floor(1 + ratio * 97)))
+  simulatedProgress.value = Math.min(98, Math.max(1, Math.floor(1 + ratio * 97)))
 }
 
 function stopProgress() {
-  if (timer) {
-    window.clearInterval(timer)
-    timer = undefined
-  }
+  if (timer) window.clearInterval(timer)
+  timer = undefined
+  if (!props.loading) simulatedProgress.value = 1
 }
 </script>
 
 <style scoped>
-.preview { padding: 24px; min-height: 560px; display: flex; flex-direction: column; gap: 18px; }
+.preview { min-height: 0; padding: 24px; display: flex; flex-direction: column; gap: 18px; }
 h2 { margin: 0; font-size: 22px; }
-.result-images { display: grid; gap: 12px; min-height: 0; }
-.result-images > img { width: 100%; max-height: 680px; object-fit: contain; border-radius: var(--radius-lg); background: var(--color-primary-soft); }
-.thumbnail-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 96px)); gap: 10px; }
-.thumbnail-button { padding: 0; overflow: hidden; border: 2px solid transparent; border-radius: var(--radius-sm); background: var(--color-primary-soft); cursor: pointer; }
-.thumbnail-button.active { border-color: var(--color-primary); box-shadow: var(--shadow-primary); }
-.thumbnail-button img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
-.loading-box {
-  flex: 1;
-  min-height: 360px;
-  display: grid;
-  place-items: center;
-  padding: 28px;
-  border-radius: var(--radius-xl);
-  background:
-    radial-gradient(circle at 24% 18%, rgba(111, 127, 63, 0.14), transparent 28%),
-    linear-gradient(135deg, rgba(232, 238, 220, 0.78), rgba(255, 255, 255, 0.92) 48%, rgba(232, 238, 220, 0.72));
-  color: var(--color-text);
-}
-.loading-card {
-  position: relative;
-  width: min(100%, 360px);
-  min-height: 300px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 36px;
-  overflow: hidden;
-  border: 1px solid rgba(226, 229, 216, 0.8);
-  border-radius: var(--radius-xl);
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 18px 54px rgba(35, 37, 31, 0.08);
-  backdrop-filter: blur(12px);
-}
-.loading-card::before {
-  content: '';
-  position: absolute;
-  inset: -40%;
-  background: conic-gradient(from 180deg, transparent, rgba(111, 127, 63, 0.12), transparent, rgba(168, 185, 120, 0.16), transparent);
-  animation: rotate 7s linear infinite;
-}
-.loading-card > * { position: relative; z-index: 1; }
-.orb-wrap { position: relative; width: 84px; height: 52px; margin-bottom: 4px; }
-.orb {
-  position: absolute;
-  top: 12px;
-  width: 38px;
-  height: 28px;
-  border: 4px solid transparent;
-  border-radius: 50%;
-  filter: drop-shadow(0 8px 16px rgba(111, 127, 63, 0.16));
-}
-.orb-primary {
-  left: 8px;
-  border-color: #94b95f #94b95f #94b95f transparent;
-  transform: rotate(-24deg);
-  animation: pulse-left 1.8s ease-in-out infinite;
-}
-.orb-secondary {
-  right: 8px;
-  border-color: #b8c39a transparent #b8c39a #b8c39a;
-  transform: rotate(24deg);
-  animation: pulse-right 1.8s ease-in-out infinite;
-}
-.orb-glow {
-  position: absolute;
-  inset: 10px 4px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(111, 127, 63, 0.18), rgba(168, 185, 120, 0.22));
-  filter: blur(14px);
-}
-.progress-value { font-size: 28px; line-height: 1; letter-spacing: -0.02em; }
-.loading-label { color: var(--color-text-muted); font-weight: 700; }
-.progress-track {
-  width: 100%;
-  height: 10px;
-  margin-top: 10px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(226, 229, 216, 0.88);
-}
-.progress-fill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--color-primary), #a8b978, #d4dcc5);
-  box-shadow: 0 0 18px rgba(111, 127, 63, 0.34);
-  transition: width 0.25s ease;
-}
+.preview > :deep(.empty-state) { flex: 1; }
+.task-grid { flex: 1; min-height: 360px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-content: start; }
+.task-grid--single { grid-template-columns: minmax(0, 1fr); }
+.task-card { min-width: 0; aspect-ratio: 1; overflow: hidden; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--color-surface) 88%, var(--color-primary-soft)); }
+.task-card--selected { border-color: var(--color-primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 18%, transparent); }
+.task-card--failed { border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border)); }
+.result-button { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.result-button:focus-visible { outline: 3px solid var(--color-primary); outline-offset: -3px; }
+.result-button img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.task-state { width: 100%; height: 100%; min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; color: var(--color-text); }
+.loading-symbol { color: var(--color-primary); font-size: 54px; font-weight: 600; line-height: 0.75; animation: loading-pulse 1.6s ease-in-out infinite; }
+.progress-value { font-size: 22px; line-height: 1; }
+.loading-label { color: var(--color-text-muted); font-size: 13px; font-weight: 700; }
+.progress-track { width: min(180px, 80%); height: 6px; margin-top: 6px; overflow: hidden; border-radius: 999px; background: var(--color-border); }
+.progress-fill { display: block; height: 100%; border-radius: inherit; background: var(--color-primary); transition: width 0.25s ease; }
+.task-state--failed { color: var(--color-danger); }
+.failure-symbol { width: 36px; height: 36px; display: grid; place-items: center; border: 2px solid currentColor; border-radius: 50%; font-size: 20px; font-weight: 800; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; }
-html.dark .loading-box {
-  background:
-    radial-gradient(circle at 24% 18%, rgba(168, 185, 120, 0.18), transparent 28%),
-    linear-gradient(135deg, rgba(47, 56, 32, 0.74), rgba(32, 35, 25, 0.92) 48%, rgba(47, 56, 32, 0.72));
-}
-html.dark .loading-card { border-color: rgba(52, 58, 41, 0.9); background: rgba(32, 35, 25, 0.78); box-shadow: 0 18px 54px rgba(0, 0, 0, 0.22); }
-html.dark .progress-track { background: rgba(52, 58, 41, 0.9); }
-@keyframes rotate { to { transform: rotate(1turn); } }
-@keyframes pulse-left { 50% { transform: rotate(-24deg) scale(1.08); } }
-@keyframes pulse-right { 50% { transform: rotate(24deg) scale(1.08); } }
+@keyframes loading-pulse { 50% { opacity: 0.55; transform: scale(1.06); } }
+@media (max-width: 680px) { .task-grid { grid-template-columns: 1fr; } .task-card { aspect-ratio: 4 / 3; } }
 </style>

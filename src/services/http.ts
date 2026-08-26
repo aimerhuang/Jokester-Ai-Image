@@ -1,23 +1,38 @@
-import axios, { type AxiosError, type InternalAxiosRequestConfig } from 'axios'
-import type { ApiError, ApiResponse } from '@/types/api'
+import axios, { type AxiosError, type AxiosRequestConfig, type InternalAxiosRequestConfig } from 'axios'
+import type { ApiError, ApiFailureResponse, ApiResponse, ApiSuccessResponse } from '@/types/api'
 import type { LoginResult } from '@/types/auth'
 
 const TOKEN_KEY = 'accessToken'
 const REFRESH_TOKEN_KEY = 'refreshToken'
 const DEFAULT_ERROR_MESSAGE = 'Request failed'
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+const CLIENT_VERSION = __APP_VERSION__
+const CLIENT_BUILD = __APP_BUILD__
 
-type ApiCode = ApiResponse<unknown>['code']
-type RetryableRequestConfig = InternalAxiosRequestConfig & { _retry?: boolean }
+type ApiCode = ApiSuccessResponse<unknown>['code'] | ApiFailureResponse['code'] | number
+type RetryableRequestConfig = InternalAxiosRequestConfig & {
+  _retry?: boolean
+  _accessToken?: string
+  skipAuthRefreshReplay?: boolean
+}
+export type SafeRequestConfig = AxiosRequestConfig & { skipAuthRefreshReplay?: boolean }
+export const noAuthRefreshReplayConfig: SafeRequestConfig = { skipAuthRefreshReplay: true }
+type ApiPayloadShape = Record<string, unknown> & {
+  code?: unknown
+  message?: unknown
+  requestId?: unknown
+  data?: unknown
+  details?: unknown
+}
 
-let refreshPromise: Promise<string> | null = null
+let activeRefresh: { refreshToken: string; promise: Promise<string> } | null = null
 const tokenRefreshListeners = new Set<(result: LoginResult) => void>()
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object'
 }
 
-function isApiPayload(value: unknown): value is Partial<ApiResponse<unknown>> & Record<string, unknown> {
+function isApiPayload(value: unknown): value is ApiPayloadShape {
   return isRecord(value) && ('code' in value || 'message' in value || 'data' in value)
 }
 
@@ -78,17 +93,18 @@ function readUserMessage(details: unknown) {
 }
 
 function toApiError(error: AxiosError<ApiResponse<unknown>>): ApiError {
-  const payload = error.response?.data
+  const rawPayload = error.response?.data as unknown
+  const payload = isRecord(rawPayload) ? rawPayload : undefined
   const status = error.response?.status
-  const code = isRecord(payload) ? payload.code ?? payload.Code : undefined
-  const details = isRecord(payload) ? payload.details ?? payload.Details : undefined
-  const requestId = isRecord(payload) ? readString(payload.requestId ?? payload.RequestId) : ''
+  const code = payload?.code ?? payload?.Code
+  const details = payload?.details ?? payload?.Details
+  const requestId = payload ? readString(payload.requestId ?? payload.RequestId) : ''
   const retryAfterSeconds = readRetryAfterSeconds(error.response?.headers['retry-after'])
     ?? (isRecord(details) ? readRetryAfterSeconds(details.retryAfterSeconds ?? details.RetryAfterSeconds) : undefined)
   return {
     code: normalizeCode(code, status || 500),
     status,
-    message: readUserMessage(details) || readErrorMessage(payload, error.message || DEFAULT_ERROR_MESSAGE),
+    message: readUserMessage(details) || readErrorMessage(rawPayload, error.message || DEFAULT_ERROR_MESSAGE),
     requestId: requestId || undefined,
     details,
     retryAfterSeconds,
@@ -99,10 +115,16 @@ function isAuthLifecycleRequest(url = '') {
   return ['/auth/login', '/auth/register', '/auth/refresh'].some((path) => url.includes(path))
 }
 
-function expireSession() {
-  if (!getStoredToken() && !getStoredRefreshToken()) return
+function expireSession(expectedAccessToken?: string | null, expectedRefreshToken?: string | null) {
+  const accessToken = getStoredToken()
+  const refreshToken = getStoredRefreshToken()
+  if (expectedAccessToken !== undefined && accessToken !== expectedAccessToken) return
+  if (expectedRefreshToken !== undefined && refreshToken !== expectedRefreshToken) return
+  if (!accessToken && !refreshToken) return
   clearStoredToken()
-  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('auth:expired'))
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('auth:expired', { detail: { accessToken } }))
+  }
 }
 
 function apiUrl(path: string) {
@@ -116,13 +138,18 @@ export const http = axios.create({
 
 http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = getStoredToken()
-  if (token) config.headers.Authorization = `Bearer ${token}`
+  const requestConfig = config as RetryableRequestConfig
+  requestConfig._accessToken = token || undefined
+  if (token) requestConfig.headers.Authorization = `Bearer ${token}`
+  requestConfig.headers['X-Client-Platform'] = 'web'
+  requestConfig.headers['X-Client-Version'] = CLIENT_VERSION
+  requestConfig.headers['X-Client-Build'] = CLIENT_BUILD
   return config
 })
 
 http.interceptors.response.use(
   (response) => {
-    const payload = response.data as ApiResponse<unknown>
+    const payload = response.data as unknown
     if (isApiPayload(payload) && 'code' in payload) {
       if (isSuccessCode(payload.code)) return 'data' in payload ? payload.data : null
       const details = payload.details
@@ -145,11 +172,13 @@ http.interceptors.response.use(
       && !originalRequest._retry
       && !isAuthLifecycleRequest(originalRequest.url)
       && Boolean(getStoredRefreshToken())
+      && (originalRequest._accessToken || null) === getStoredToken()
 
     if (canRefresh) {
       originalRequest._retry = true
       try {
         const token = await refreshAccessToken()
+        if (originalRequest.skipAuthRefreshReplay) return Promise.reject(toApiError(error))
         originalRequest.headers.Authorization = `Bearer ${token}`
         if (originalRequest.url?.includes('/auth/logout')) {
           originalRequest.headers['X-Refresh-Token'] = getStoredRefreshToken() || ''
@@ -159,7 +188,7 @@ http.interceptors.response.use(
         // refreshAccessToken owns session expiration for all waiting requests.
       }
     } else if (error.response?.status === 401 && !isAuthLifecycleRequest(originalRequest?.url)) {
-      expireSession()
+      expireSession(originalRequest?._accessToken ?? null)
     }
 
     return Promise.reject(toApiError(error))
@@ -190,30 +219,35 @@ export function subscribeToTokenRefresh(listener: (result: LoginResult) => void)
 }
 
 export function refreshAccessToken() {
-  if (refreshPromise) return refreshPromise
   const refreshToken = getStoredRefreshToken()
   if (!refreshToken) return Promise.reject(new Error('Refresh token is missing'))
+  if (activeRefresh?.refreshToken === refreshToken) return activeRefresh.promise
+  const accessToken = getStoredToken()
 
-  refreshPromise = axios.post<ApiResponse<LoginResult>>(
+  const request = axios.post<ApiResponse<LoginResult>>(
     apiUrl('/auth/refresh'),
     { refreshToken },
     { timeout: 30000 },
   ).then((response) => {
     const payload = response.data
-    if (!isApiPayload(payload) || !('code' in payload) || !isSuccessCode(payload.code) || !payload.data) {
+    if (!isApiPayload(payload) || !('code' in payload) || !isSuccessCode(payload.code) || !('data' in payload) || !payload.data) {
       throw new Error(readErrorMessage(payload, 'Token refresh failed'))
     }
     const result = payload.data as LoginResult
     if (!result.accessToken || !result.refreshToken) throw new Error('Token refresh response is incomplete')
+    if (getStoredToken() !== accessToken || getStoredRefreshToken() !== refreshToken) {
+      throw new Error('Token refresh was invalidated by a newer session')
+    }
     setStoredToken(result.accessToken, result.refreshToken)
     tokenRefreshListeners.forEach((listener) => listener(result))
     return result.accessToken
   }).catch((error) => {
-    expireSession()
+    expireSession(accessToken, refreshToken)
     throw error
   }).finally(() => {
-    refreshPromise = null
+    if (activeRefresh?.promise === request) activeRefresh = null
   })
+  activeRefresh = { refreshToken, promise: request }
 
-  return refreshPromise
+  return request
 }

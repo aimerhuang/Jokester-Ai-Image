@@ -1,5 +1,4 @@
 import { onBeforeUnmount, ref } from 'vue'
-import { ElMessage } from 'element-plus'
 import { getImageRecord } from '@/services/aiImages'
 import { getImageUrl } from '@/utils/imageActions'
 import type { ApiError } from '@/types/api'
@@ -10,15 +9,17 @@ const MIN_POLLING_INTERVAL_MS = 1000
 const MAX_POLLING_INTERVAL_MS = 30000
 const MAX_TIMER_DELAY_MS = 2_147_000_000
 const PENDING_TASK_STORAGE_KEY = 'pendingAiImageTaskId'
-const PENDING_TASK_STORAGE_VERSION = 1
+const PENDING_TASK_STORAGE_VERSION = 2
 
-type ImageTaskSnapshot = GeneratedImageResult | ImageRecord | ImageTaskCreationResult
+export type ImageTaskSnapshot = GeneratedImageResult | ImageRecord | ImageTaskCreationResult
 
 interface UseImageTaskPollingOptions {
-  onUpdate: (task: ImageTaskSnapshot) => void
-  onSuccess?: (task: ImageTaskSnapshot) => void
-  onFailure?: (task: ImageTaskSnapshot) => void
-  onExpired?: (taskId: string | number) => void
+  onUpdate: (task: ImageTaskSnapshot, index: number, total: number) => void
+  onSuccess?: (task: ImageTaskSnapshot, index: number, total: number) => void
+  onFailure?: (task: ImageTaskSnapshot, index: number, total: number) => void
+  onExpired?: (taskId: string | number, index: number, total: number) => void
+  onUnavailable?: (taskId: string | number, index: number, total: number) => void
+  onError?: (error: ApiError, taskId: string | number) => void
 }
 
 interface StartPollingOptions {
@@ -29,128 +30,195 @@ interface StartPollingOptions {
 interface PendingTaskPayload extends StartPollingOptions {
   version: number
   taskId: string | number
+  taskIds: Array<string | number>
+}
+
+interface ActiveTask {
+  taskId: string | number
+  index: number
+  total: number
+  expiresAt?: number
+  imageCount?: number
+  timer: ReturnType<typeof setTimeout> | null
+  expirationTimer: ReturnType<typeof setTimeout> | null
 }
 
 export function useImageTaskPolling(options: UseImageTaskPollingOptions) {
   const polling = ref(false)
-  let timer: ReturnType<typeof setTimeout> | null = null
-  let expirationTimer: ReturnType<typeof setTimeout> | null = null
-  let activeTaskId: string | null = null
+  const activeTasks = new Map<string, ActiveTask>()
+  let batchTaskIds: Array<string | number> = []
+  let batchOptions: StartPollingOptions = {}
 
   function start(taskId: string | number, startOptions: StartPollingOptions = {}) {
+    startMany([taskId], startOptions)
+  }
+
+  function startMany(taskIds: Array<string | number>, startOptions: StartPollingOptions = {}) {
     stop(false)
+    const uniqueTaskIds = uniqueIds(taskIds)
+    if (!uniqueTaskIds.length) return
+    batchTaskIds = uniqueTaskIds
+    batchOptions = { ...startOptions }
 
     if (isExpired(startOptions.expiresAt)) {
-      expireTask(taskId)
+      localStorage.removeItem(PENDING_TASK_STORAGE_KEY)
+      uniqueTaskIds.forEach((taskId, index) => options.onExpired?.(taskId, index, uniqueTaskIds.length))
       return
     }
 
-    storePendingTask(taskId, startOptions)
-    activeTaskId = String(taskId)
-    polling.value = true
-    scheduleExpiration(taskId, startOptions.expiresAt)
-
-    void fetchTask(taskId)
+    storePendingTasks(uniqueTaskIds, startOptions)
+    uniqueTaskIds.forEach((taskId, index) => {
+      const activeTask: ActiveTask = {
+        taskId,
+        index,
+        total: uniqueTaskIds.length,
+        expiresAt: startOptions.expiresAt,
+        imageCount: startOptions.imageCount,
+        timer: null,
+        expirationTimer: null,
+      }
+      activeTasks.set(String(taskId), activeTask)
+      scheduleExpiration(activeTask)
+    })
+    syncPollingState()
+    activeTasks.forEach((activeTask) => void fetchTask(activeTask))
   }
 
   function resumePending() {
     const pendingTask = readPendingTask()
-    if (!pendingTask) return
+    if (!pendingTask) return null
 
     if (isExpired(pendingTask.expiresAt)) {
       localStorage.removeItem(PENDING_TASK_STORAGE_KEY)
-      return
+      pendingTask.taskIds.forEach((taskId, index) => options.onExpired?.(taskId, index, pendingTask.taskIds.length))
+      return pendingTask
     }
 
-    start(pendingTask.taskId, pendingTask)
+    startMany(pendingTask.taskIds, pendingTask)
+    return pendingTask
   }
 
   function stop(clearPending = true) {
-    if (timer) {
-      window.clearTimeout(timer)
-      timer = null
-    }
-    if (expirationTimer) {
-      window.clearTimeout(expirationTimer)
-      expirationTimer = null
-    }
-    polling.value = false
-    activeTaskId = null
+    activeTasks.forEach(clearTaskTimers)
+    activeTasks.clear()
+    syncPollingState()
     if (clearPending) {
+      batchTaskIds = []
+      batchOptions = {}
       localStorage.removeItem(PENDING_TASK_STORAGE_KEY)
     }
   }
 
-  function scheduleExpiration(taskId: string | number, expiresAt: number | undefined) {
-    if (typeof expiresAt !== 'number') return
+  function scheduleExpiration(activeTask: ActiveTask) {
+    if (typeof activeTask.expiresAt !== 'number') return
+    if (activeTask.expirationTimer) window.clearTimeout(activeTask.expirationTimer)
 
-    if (expirationTimer) {
-      window.clearTimeout(expirationTimer)
-      expirationTimer = null
-    }
-
-    const remainingMs = expiresAt - Date.now()
+    const remainingMs = activeTask.expiresAt - Date.now()
     if (remainingMs <= 0) {
-      expireTask(taskId)
+      expireTask(activeTask)
       return
     }
 
-    expirationTimer = window.setTimeout(() => expireTask(taskId), Math.min(remainingMs, MAX_TIMER_DELAY_MS))
+    activeTask.expirationTimer = window.setTimeout(
+      () => expireTask(activeTask),
+      Math.min(remainingMs, MAX_TIMER_DELAY_MS),
+    )
   }
 
-  function expireTask(taskId: string | number) {
-    stop()
-    options.onExpired?.(taskId)
+  function expireTask(activeTask: ActiveTask) {
+    if (!activeTasks.has(String(activeTask.taskId))) return
+    finishTask(activeTask)
+    options.onExpired?.(activeTask.taskId, activeTask.index, activeTask.total)
   }
 
-  async function fetchTask(taskId: string | number) {
-    if (activeTaskId !== String(taskId)) return
+  async function fetchTask(activeTask: ActiveTask) {
+    if (!activeTasks.has(String(activeTask.taskId))) return
 
     try {
-      const task = await getImageRecord(taskId)
-      if (activeTaskId !== String(taskId)) return
-      options.onUpdate(task)
+      const task = await getImageRecord(activeTask.taskId)
+      if (!activeTasks.has(String(activeTask.taskId))) return
+      if (!task) {
+        finishTask(activeTask)
+        options.onUnavailable?.(activeTask.taskId, activeTask.index, activeTask.total)
+        return
+      }
+      options.onUpdate(task, activeTask.index, activeTask.total)
 
       if (isProcessing(task)) {
         const serverExpiresAt = parseExpiresAt(task.expiresAt)
-        if (serverExpiresAt) scheduleExpiration(taskId, serverExpiresAt)
-        scheduleNext(taskId, task.pollAfterSeconds)
+        if (serverExpiresAt) {
+          activeTask.expiresAt = serverExpiresAt
+          scheduleExpiration(activeTask)
+          persistActiveTasks()
+        }
+        scheduleNext(activeTask, task.pollAfterSeconds, normalizeTaskStatus(task) === 'processing' ? 5000 : 3000)
         return
       }
 
-      stop()
+      finishTask(activeTask)
       if (isSuccess(task)) {
-        options.onSuccess?.(task)
+        options.onSuccess?.(task, activeTask.index, activeTask.total)
         return
       }
 
-      options.onFailure?.(task)
-      ElMessage.error(task.errorMessage || 'Image generation failed')
+      options.onFailure?.(task, activeTask.index, activeTask.total)
     } catch (error) {
-      if (activeTaskId === String(taskId)) scheduleNext(taskId, (error as ApiError).retryAfterSeconds)
-      ElMessage.error((error as ApiError).message)
+      const apiError = error as ApiError
+      if (activeTasks.has(String(activeTask.taskId))) scheduleNext(activeTask, apiError.retryAfterSeconds)
+      options.onError?.(apiError, activeTask.taskId)
     }
   }
 
-  function scheduleNext(taskId: string | number, pollAfterSeconds?: number) {
-    if (activeTaskId !== String(taskId)) return
-    if (timer) window.clearTimeout(timer)
+  function scheduleNext(activeTask: ActiveTask, pollAfterSeconds?: number, fallbackDelayMs = POLLING_INTERVAL_MS) {
+    if (!activeTasks.has(String(activeTask.taskId))) return
+    if (activeTask.timer) window.clearTimeout(activeTask.timer)
     const requestedMs = Number(pollAfterSeconds) * 1000
     const delay = Number.isFinite(requestedMs) && requestedMs > 0
       ? Math.min(MAX_POLLING_INTERVAL_MS, Math.max(MIN_POLLING_INTERVAL_MS, requestedMs))
-      : POLLING_INTERVAL_MS
-    timer = window.setTimeout(() => {
-      timer = null
-      void fetchTask(taskId)
+      : fallbackDelayMs
+    activeTask.timer = window.setTimeout(() => {
+      activeTask.timer = null
+      void fetchTask(activeTask)
     }, delay)
   }
 
-  function handleInitialResult(task: ImageTaskSnapshot, startOptions: StartPollingOptions = {}) {
-    options.onUpdate(task)
+  function finishTask(activeTask: ActiveTask) {
+    clearTaskTimers(activeTask)
+    activeTasks.delete(String(activeTask.taskId))
+    syncPollingState()
+    persistActiveTasks()
+  }
 
-    const taskId = getTaskId(task)
-    if (taskId && shouldPollInitialResult(task)) {
-      start(taskId, {
+  function syncPollingState() {
+    polling.value = activeTasks.size > 0
+  }
+
+  function persistActiveTasks() {
+    const remaining = [...activeTasks.values()].sort((left, right) => left.index - right.index)
+    if (!remaining.length) {
+      batchTaskIds = []
+      batchOptions = {}
+      localStorage.removeItem(PENDING_TASK_STORAGE_KEY)
+      return
+    }
+    const activeExpirations = remaining.map((item) => item.expiresAt).filter((value): value is number => typeof value === 'number')
+    batchOptions = {
+      expiresAt: activeExpirations.length ? Math.max(...activeExpirations) : batchOptions.expiresAt,
+      imageCount: batchOptions.imageCount || remaining[0]?.imageCount,
+    }
+    storePendingTasks(batchTaskIds.length ? batchTaskIds : remaining.map((item) => item.taskId), {
+      expiresAt: batchOptions.expiresAt,
+      imageCount: batchOptions.imageCount,
+    })
+  }
+
+  function handleInitialResult(task: ImageTaskSnapshot, startOptions: StartPollingOptions = {}) {
+    const taskIds = getTaskIds(task)
+    const total = Math.max(taskIds.length, 1)
+    options.onUpdate(task, 0, total)
+
+    if (taskIds.length && shouldPollInitialResult(task)) {
+      startMany(taskIds, {
         ...startOptions,
         expiresAt: parseExpiresAt(task.expiresAt) || startOptions.expiresAt,
       })
@@ -159,14 +227,13 @@ export function useImageTaskPolling(options: UseImageTaskPollingOptions) {
 
     if (isSuccess(task)) {
       stop()
-      options.onSuccess?.(task)
+      options.onSuccess?.(task, 0, total)
       return
     }
 
     if (isFailure(task)) {
       stop()
-      options.onFailure?.(task)
-      ElMessage.error(task.errorMessage || 'Image generation failed')
+      options.onFailure?.(task, 0, total)
     }
   }
 
@@ -175,20 +242,28 @@ export function useImageTaskPolling(options: UseImageTaskPollingOptions) {
   return {
     polling,
     start,
+    startMany,
     stop,
     resumePending,
     handleInitialResult,
   }
 }
 
-function storePendingTask(taskId: string | number, options: StartPollingOptions) {
+function clearTaskTimers(activeTask: ActiveTask) {
+  if (activeTask.timer) window.clearTimeout(activeTask.timer)
+  if (activeTask.expirationTimer) window.clearTimeout(activeTask.expirationTimer)
+  activeTask.timer = null
+  activeTask.expirationTimer = null
+}
+
+function storePendingTasks(taskIds: Array<string | number>, options: StartPollingOptions) {
   const payload: PendingTaskPayload = {
     version: PENDING_TASK_STORAGE_VERSION,
-    taskId,
+    taskId: taskIds[0]!,
+    taskIds,
     expiresAt: options.expiresAt,
     imageCount: options.imageCount,
   }
-
   localStorage.setItem(PENDING_TASK_STORAGE_KEY, JSON.stringify(payload))
 }
 
@@ -198,14 +273,16 @@ function readPendingTask(): PendingTaskPayload | null {
 
   try {
     const parsed = JSON.parse(raw) as Partial<PendingTaskPayload>
-    if (!parsed || typeof parsed !== 'object' || !parsed.taskId || typeof parsed.expiresAt !== 'number') {
+    const taskIds = uniqueIds(Array.isArray(parsed.taskIds) ? parsed.taskIds : parsed.taskId ? [parsed.taskId] : [])
+    if (!parsed || typeof parsed !== 'object' || !taskIds.length || typeof parsed.expiresAt !== 'number') {
       localStorage.removeItem(PENDING_TASK_STORAGE_KEY)
       return null
     }
 
     return {
-      version: Number(parsed.version) || PENDING_TASK_STORAGE_VERSION,
-      taskId: parsed.taskId,
+      version: Number(parsed.version) || 1,
+      taskId: taskIds[0]!,
+      taskIds,
       expiresAt: parsed.expiresAt,
       imageCount: parsed.imageCount,
     }
@@ -215,8 +292,30 @@ function readPendingTask(): PendingTaskPayload | null {
   }
 }
 
+function uniqueIds(taskIds: Array<string | number>) {
+  const seen = new Set<string>()
+  return taskIds.filter((taskId) => {
+    if (taskId === '' || taskId === null || taskId === undefined) return false
+    const key = String(taskId)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+export function getTaskIds(task: ImageTaskSnapshot) {
+  const taskWithIds = task as ImageTaskCreationResult
+  const arrayIds = Array.isArray(taskWithIds.taskIds) && taskWithIds.taskIds.length
+    ? taskWithIds.taskIds
+    : Array.isArray(taskWithIds.ids)
+      ? taskWithIds.ids
+      : []
+  const scalarIds = [task.taskId || task.id].filter(Boolean) as Array<string | number>
+  return uniqueIds(arrayIds.length ? arrayIds : scalarIds)
+}
+
 export function getTaskId(task: ImageTaskSnapshot) {
-  return task.taskId || task.id
+  return getTaskIds(task)[0]
 }
 
 export function isProcessing(task: ImageTaskSnapshot) {
@@ -226,16 +325,16 @@ export function isProcessing(task: ImageTaskSnapshot) {
 
 export function isSuccess(task: ImageTaskSnapshot) {
   return normalizeTaskStatus(task) === 'succeeded'
-    || (task.status === undefined && task.statusCode === undefined && Boolean(getImageUrl(task)))
+    || (task.status === undefined && task.statusCode === undefined && task.batchStatus === undefined && Boolean(getImageUrl(task)))
 }
 
 export function isFailure(task: ImageTaskSnapshot) {
   const status = normalizeTaskStatus(task)
-  return status === 'failed' || status === 'cancelled'
+  return status === 'failed' || status === 'cancelled' || status === 'partial'
 }
 
-function normalizeTaskStatus(task: ImageTaskSnapshot) {
-  const rawStatus = task.status ?? task.statusCode
+export function normalizeTaskStatus(task: ImageTaskSnapshot) {
+  const rawStatus = task.status ?? task.statusCode ?? task.batchStatus
   if (typeof rawStatus === 'string') return rawStatus.trim().toLowerCase()
   if (rawStatus === 0 || rawStatus === 3) return 'processing'
   if (rawStatus === 1) return 'succeeded'
@@ -254,5 +353,5 @@ function isExpired(expiresAt: number | undefined) {
 }
 
 function shouldPollInitialResult(task: ImageTaskSnapshot) {
-  return Boolean(getTaskId(task)) && !isSuccess(task) && !isFailure(task)
+  return getTaskIds(task).length > 0 && !isSuccess(task) && !isFailure(task)
 }

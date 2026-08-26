@@ -1,9 +1,13 @@
 export type ResolutionCode = string
 export type QualityCode = string
 export type AspectRatioCode = string
+export type ImageSizeMode = 'explicit' | 'auto'
+export type ImageSizeContractVersion = 'size-mode-v1' | 'legacy-explicit-v1' | 'legacy-aspect-auto' | 'legacy-unknown'
 export type ImageTaskStatus = 0 | 1 | 2 | 3
 export type ImageTaskState = 'queued' | 'processing' | 'succeeded' | 'failed' | 'cancelled'
 export type ImageBillingStatus = 0 | 1 | 2 | 3
+export type ImageRequestState = 'active' | 'partially_deleted' | 'deleted'
+export type ImageBatchStatus = 'processing' | 'succeeded' | 'partial' | 'failed'
 
 export interface ImageParameterOption {
   code?: string
@@ -20,6 +24,8 @@ export interface ImageParameterOption {
   resolutions?: string[]
   qualities?: string[]
   aspectRatios?: string[]
+  sizeContractVersion?: ImageSizeContractVersion | string
+  catalogVersion?: string
 }
 
 export interface ImageModelCapabilities {
@@ -27,6 +33,9 @@ export interface ImageModelCapabilities {
   maxReferenceImages: number
   supportsQuality: boolean
   supportedImageCounts: number[]
+  sizeModes?: ImageSizeMode[]
+  defaultSizeMode?: ImageSizeMode
+  supportsAutoSize?: boolean
 }
 
 export interface ImageParameterApiOption {
@@ -42,16 +51,26 @@ export interface ImageParameterApiOption {
   resolutions?: string[]
   qualities?: string[]
   aspectRatios?: string[]
+  sizeContractVersion?: ImageSizeContractVersion | string
+  catalogVersion?: string
 }
 
 export interface AiImagePointPrice {
   modelCode: string
-  resolutionCode: string
+  sizeMode?: ImageSizeMode
+  resolutionCode: string | null
   qualityCode: string
   points: number
   priceAmount: number
+  priceMinorUnits?: number
   currency: string
   sort: number
+}
+
+export interface AiImagePricingEnvelope {
+  modelCode: string
+  catalogVersion: string
+  items: AiImagePointPrice[]
 }
 
 export interface ImageParameters {
@@ -70,18 +89,25 @@ export interface ImageParametersResponse {
 }
 
 export interface ResolveImageParametersRequest {
-  resolutionCode: ResolutionCode
+  modelCode?: string
+  sizeMode?: ImageSizeMode
+  catalogVersion?: string
+  resolutionCode?: ResolutionCode | null
   qualityCode: QualityCode
-  aspectRatioCode: AspectRatioCode
+  aspectRatioCode?: AspectRatioCode | null
   referenceImageUrls?: string[]
 }
 
 export interface ResolveImageParametersResponse {
-  resolutionCode: ResolutionCode
+  modelCode?: string
+  sizeMode?: ImageSizeMode
+  catalogVersion?: string
+  requestedSize?: string
+  resolutionCode: ResolutionCode | null
   qualityCode: QualityCode
-  aspectRatioCode: AspectRatioCode
-  width: number
-  height: number
+  aspectRatioCode: AspectRatioCode | null
+  width: number | null
+  height: number | null
   size: string
   providerQuality: string
 }
@@ -93,9 +119,11 @@ export interface CreateImageTaskRequest {
   modelCode: string
   modelName?: string
   imageCount: number
-  resolutionCode: ResolutionCode
-  qualityCode: QualityCode
-  aspectRatioCode: AspectRatioCode
+  sizeMode?: ImageSizeMode
+  catalogVersion?: string
+  resolutionCode?: ResolutionCode | null
+  qualityCode?: QualityCode
+  aspectRatioCode?: AspectRatioCode | null
   referenceImageUrls: string[]
   referenceAssetIds: string[]
   negativePrompt?: string | null
@@ -138,6 +166,24 @@ export interface UploadReferenceImageResult {
 export interface ImageTaskCreationResult extends Partial<GeneratedImageResult> {
   id: number
   ids?: number[]
+  taskIds?: number[]
+  requestState?: ImageRequestState
+}
+
+export interface GeneratedImageBatchItem {
+  ordinal: number
+  taskId: number | string
+  status: Exclude<ImageTaskState, 'cancelled'>
+  isDeleted: boolean
+  url?: string | null
+  outputWidth?: number | null
+  outputHeight?: number | null
+  outputSize?: string | null
+  mimeType?: string | null
+  failureCode?: string | null
+  failureStage?: string | null
+  retryable?: boolean | null
+  refundedPoints?: number | null
 }
 
 export interface GeneratedImageResult {
@@ -148,9 +194,20 @@ export interface GeneratedImageResult {
   modelCode?: string
   providerModel?: string
   prompt?: string
-  resolutionCode?: ResolutionCode
+  sizeContractVersion?: ImageSizeContractVersion | string
+  sizeMode?: ImageSizeMode | null
+  catalogVersion?: string | null
+  requestedSize?: string | null
+  requestedResolutionCode?: ResolutionCode | null
+  requestedAspectRatioCode?: AspectRatioCode | null
+  requestedWidth?: number | null
+  requestedHeight?: number | null
+  outputWidth?: number | null
+  outputHeight?: number | null
+  outputSize?: string | null
+  resolutionCode?: ResolutionCode | null
   qualityCode?: QualityCode
-  aspectRatioCode?: AspectRatioCode
+  aspectRatioCode?: AspectRatioCode | null
   width?: number
   height?: number
   size?: string
@@ -170,6 +227,14 @@ export interface GeneratedImageResult {
   pollAfterSeconds?: number
   expiresAt?: string
   errorMessage?: string | null
+  failureCode?: string | null
+  failureStage?: string | null
+  retryable?: boolean | null
+  refundedPoints?: number | null
+  requestState?: ImageRequestState
+  batchStatus?: ImageBatchStatus
+  isDeleted?: boolean
+  results?: GeneratedImageBatchItem[]
   revisedPrompt?: string | null
   createdAt?: string
   updatedAt?: string | null
@@ -192,9 +257,9 @@ export interface ImageRecord extends GeneratedImageResult {
   completedImageCount: number
   pointCost: number
   billingStatus: ImageBillingStatus
-  resolutionCode: ResolutionCode
+  resolutionCode: ResolutionCode | null
   qualityCode: QualityCode
-  aspectRatioCode: AspectRatioCode
+  aspectRatioCode: AspectRatioCode | null
   width: number
   height: number
   size: string

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from 'playwright/test'
 
-const baseUrl = process.env.E2E_BASE_URL || 'http://127.0.0.1:5174'
+const baseUrl = process.env.E2E_BASE_URL || 'http://127.0.0.1:5173'
 const promptText = 'Create a precise exploded-view poster with labeled components and a clean editorial layout.'
 const coverPng = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2n0cAAAAASUVORK5CYII=',
@@ -139,12 +139,35 @@ async function mockBackend(page: Page): Promise<MockState> {
       })
     }
     if (path === '/api/ai/images/models') {
-      return success([{ code: 'gpt-image-2', name: 'GPT Image 2', sort: 1 }])
+      return success([{
+        code: 'gpt-image-2',
+        name: 'GPT Image 2',
+        sort: 1,
+        resolutions: ['1k'],
+        qualities: ['med'],
+        aspectRatios: ['1:1'],
+        capabilities: {
+          supportsReferenceImages: true,
+          maxReferenceImages: 6,
+          supportsQuality: true,
+          supportedImageCounts: [1, 2, 3, 4],
+        },
+      }])
     }
-    if (path === '/api/ai/images/pricing-options') return success([])
+    if (path === '/api/ai/images/pricing-options') {
+      return success([{
+        modelCode: 'gpt-image-2',
+        resolutionCode: '1k',
+        qualityCode: 'med',
+        points: 1,
+      }])
+    }
     if (path === '/api/ai/images' && method === 'POST') {
       state.generatedRequests.push(request.postDataJSON() as Record<string, unknown>)
       return success({ id: 99, status: 1, resultUrls: ['/ai-images/e2e-result.png'] })
+    }
+    if (path === '/api/ai/images' && method === 'GET') {
+      return success({ total: 0, pageIndex: 1, pageSize: 20, items: [] })
     }
 
     return success(null)
@@ -160,11 +183,19 @@ async function openLibrary(page: Page) {
   await expect(page.locator('.prompt-card').nth(1).getByText('封面暂不可用')).toBeVisible()
 }
 
-test.use({
-  launchOptions: {
-    executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  },
-})
+async function navigateFromSidebar(page: Page, path: '/playground' | '/images' | '/prompts') {
+  await page.locator(`.sidebar nav a[href="${path}"]`).click()
+  await expect(page).toHaveURL(new RegExp(`${path}$`))
+}
+
+async function useFirstLibraryPrompt(page: Page) {
+  await expect(page.locator('.prompt-card')).toHaveCount(2)
+  await page.locator('.prompt-card').first().getByRole('button', { name: '查看详情' }).click()
+  await expect(page.locator('.prompt-detail-dialog')).toBeVisible()
+  await page.locator('.prompt-detail-dialog').getByRole('button', { name: '用于创作' }).click()
+  await expect(page).toHaveURL(/\/playground$/)
+  await expect(page.locator('.prompt-textarea textarea')).toHaveValue(promptText)
+}
 
 test('prompt library search, copy, detail, and use workflow', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
@@ -207,6 +238,31 @@ test('prompt library search, copy, detail, and use workflow', async ({ page }) =
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(1)
   await page.screenshot({ path: 'test-results/prompt-library-workflow.png', fullPage: true })
+})
+
+test('does not retain an untouched library prompt but retains it after manual editing', async ({ page }) => {
+  await mockBackend(page)
+  await page.goto(`${baseUrl}/playground`)
+  const promptInput = page.locator('.prompt-textarea textarea')
+  await expect(promptInput).toBeVisible()
+
+  const previousManualPrompt = 'An older manual draft that must not return after using the library.'
+  await promptInput.fill(previousManualPrompt)
+  await navigateFromSidebar(page, '/prompts')
+  await useFirstLibraryPrompt(page)
+
+  await navigateFromSidebar(page, '/images')
+  await navigateFromSidebar(page, '/playground')
+  await expect(promptInput).toHaveValue('')
+
+  await navigateFromSidebar(page, '/prompts')
+  await useFirstLibraryPrompt(page)
+  const editedLibraryPrompt = `${promptText} Add a hand-drawn annotation layer.`
+  await promptInput.fill(editedLibraryPrompt)
+
+  await navigateFromSidebar(page, '/images')
+  await navigateFromSidebar(page, '/playground')
+  await expect(promptInput).toHaveValue(editedLibraryPrompt)
 })
 
 test('prompt library mobile layout has no horizontal overflow', async ({ page }) => {

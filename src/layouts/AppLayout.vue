@@ -2,13 +2,16 @@
   <main class="app-layout">
     <aside class="sidebar page-card">
       <AppLogo />
-      <nav>
+      <nav class="primary-nav">
         <router-link v-for="item in visibleNavItems" :key="item.to" :to="item.to">{{ app.t(item.label) }}</router-link>
       </nav>
       <div class="sidebar-footer">
         <LegalLinks />
         <div class="account-card">
-          <strong class="account-trigger" @click="openSettings">{{ nickname }}</strong>
+          <div class="account-identity">
+            <button class="account-trigger" type="button" @click="openSettings">{{ nickname }}</button>
+            <MonthlyVipBadge :membership="auth.user?.membership" />
+          </div>
           <button class="settings-link" type="button" @click="openSettings">{{ app.t('profile.clickSettings') }}</button>
           <span>{{ app.t('profile.currentCredits') }}: {{ credits.summary.balance }}</span>
           <el-button class="logout-button" text @click="handleLogout">{{ app.t('common.logout') }}</el-button>
@@ -24,6 +27,9 @@
           <p v-if="pageSubtitle">{{ pageSubtitle }}</p>
         </div>
         <div class="topbar-actions">
+          <div class="mobile-vip-status">
+            <MonthlyVipBadge :membership="auth.user?.membership" />
+          </div>
           <el-button type="primary" class="soft-button" :loading="credits.signingIn" :disabled="credits.summary.checkedInToday" @click="checkIn">
             {{ credits.summary.checkedInToday ? app.t('credits.checkedInToday') : app.t('credits.checkIn') }}
           </el-button>
@@ -41,6 +47,13 @@
     <el-drawer v-model="drawer" size="280px" direction="ltr">
       <div class="drawer-content">
         <AppLogo />
+        <div class="drawer-account">
+          <div class="account-identity">
+            <strong>{{ nickname }}</strong>
+            <MonthlyVipBadge :membership="auth.user?.membership" />
+          </div>
+          <button class="settings-link" type="button" @click="openDrawerSettings">{{ app.t('profile.clickSettings') }}</button>
+        </div>
         <router-link v-for="item in visibleNavItems" :key="item.to" :to="item.to" @click="drawer = false">{{ app.t(item.label) }}</router-link>
         <LegalLinks class="drawer-legal" />
       </div>
@@ -97,13 +110,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Coin } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import AppLogo from '@/components/common/AppLogo.vue'
 import LegalLinks from '@/components/common/LegalLinks.vue'
 import LocaleToggle from '@/components/common/LocaleToggle.vue'
+import MonthlyVipBadge from '@/components/common/MonthlyVipBadge.vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
 import { updateNickname, updatePassword } from '@/services/user'
 import { useAppStore } from '@/stores/app'
@@ -143,10 +157,29 @@ const visibleNavItems = computed(() => navItems.filter((item) => !item.superAdmi
 onMounted(() => {
   auth.ensureCurrentUser().catch(() => undefined)
   credits.fetchSummary().catch(() => undefined)
+  document.addEventListener('visibilitychange', refreshVisibleBalance)
 })
+
+onBeforeUnmount(() => document.removeEventListener('visibilitychange', refreshVisibleBalance))
+
+watch(() => auth.token, (token, previousToken) => {
+  if (token && token !== previousToken) {
+    credits.activateForUser(auth.user?.id ?? null, auth.user?.pointBalance)
+    void credits.fetchSummary().catch(() => undefined)
+  }
+})
+
+function refreshVisibleBalance() {
+  if (document.visibilityState === 'visible') void credits.fetchSummary().catch(() => undefined)
+}
 
 function openSettings() {
   settingsVisible.value = true
+}
+
+function openDrawerSettings() {
+  drawer.value = false
+  openSettings()
 }
 
 function openNicknameDialog() {
@@ -206,29 +239,33 @@ async function checkIn() {
   try {
     await credits.signIn()
     ElMessage.success(app.t('credits.checkInSuccess'))
-  } catch (error) {
-    ElMessage.error((error as ApiError).message || app.t('credits.checkInFailed'))
+  } catch {
+    ElMessage.error(app.t('credits.checkInFailed'))
   }
 }
 
 async function handleLogout() {
   await auth.logout()
-  router.push('/login')
+  credits.activateForUser(null)
+  await router.replace('/login')
 }
 </script>
 
 <style scoped>
 .app-layout { min-height: 100vh; max-width: 100vw; overflow-x: hidden; display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr); gap: 24px; padding: 24px; background: radial-gradient(circle at top right, rgba(111,127,63,.12), transparent 34%), var(--color-bg); }
-.sidebar { position: sticky; top: 24px; min-width: 0; height: calc(100vh - 48px); padding: 20px; display: flex; flex-direction: column; gap: 28px; }
-nav, .drawer-content { display: grid; gap: 8px; }
-a { padding: 12px 14px; border-radius: var(--radius-md); color: var(--color-text-muted); font-weight: 600; }
-a.router-link-active { background: var(--color-primary-soft); color: var(--color-primary-hover); }
-.sidebar-footer { margin-top: auto; display: grid; gap: 12px; }
+.sidebar { position: sticky; top: 24px; min-width: 0; height: calc(100vh - 48px); padding: 20px; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 28px; }
+.primary-nav, .drawer-content { display: grid; gap: 8px; }
+.primary-nav { flex: 0 0 auto; }
+.primary-nav > a, .drawer-content > a { padding: 12px 14px; border-radius: var(--radius-md); color: var(--color-text-muted); font-weight: 600; }
+.primary-nav > a.router-link-active, .drawer-content > a.router-link-active { background: var(--color-primary-soft); color: var(--color-primary-hover); }
+.sidebar-footer { flex: 0 0 auto; margin-top: auto; display: grid; gap: 12px; }
 .account-card { padding: 14px; border-radius: var(--radius-md); background: var(--color-primary-soft); display: grid; gap: 4px; }
-.account-card span { color: var(--color-text-muted); font-size: 13px; }
-.account-trigger { cursor: pointer; }
+.account-card > span { color: var(--color-text-muted); font-size: 13px; }
+.account-identity { min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.account-trigger { min-width: 0; padding: 0; overflow-wrap: anywhere; border: 0; background: transparent; color: var(--color-text); text-align: left; font-weight: 700; cursor: pointer; }
 .settings-link { width: fit-content; padding: 0; border: 0; background: transparent; color: var(--color-primary-hover); font-size: 12px; cursor: pointer; }
 .settings-link:hover, .account-trigger:hover { text-decoration: underline; }
+.settings-link:focus-visible, .account-trigger:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: 2px; }
 .logout-button:hover { color: var(--el-color-danger); }
 .settings-info { display: grid; gap: 14px; }
 .settings-info > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
@@ -239,10 +276,12 @@ a.router-link-active { background: var(--color-primary-soft); color: var(--color
 .topbar-title h1 { margin: 0; font-size: clamp(28px, 4vw, 40px); line-height: 1.08; }
 .topbar-title p { margin: 10px 0 0; color: var(--color-text-muted); }
 .topbar-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.mobile-vip-status { display: none; align-items: center; }
 .recharge-entry { white-space: nowrap; }
 .mobile-menu { display: none; margin-right: auto; }
 .drawer-content { padding: 8px; }
+.drawer-account { min-width: 0; margin: 4px 6px 10px; padding: 10px 8px 14px; display: grid; gap: 5px; border-bottom: 1px solid var(--color-border); }
 .drawer-legal { margin-top: 18px; padding: 12px 14px; border-top: 1px solid var(--color-border); }
-@media (max-width: 900px) { .app-layout { grid-template-columns: 1fr; padding: 16px 16px 88px; } .sidebar { display: none; } .mobile-menu { display: inline-flex; } .topbar { gap: 8px; flex-wrap: wrap; min-height: 0; } .topbar-title { order: 3; width: 100%; } .topbar-actions { flex-wrap: wrap; justify-content: flex-end; } }
+@media (max-width: 900px) { .app-layout { grid-template-columns: 1fr; padding: 16px 16px 88px; } .sidebar { display: none; } .mobile-menu { display: inline-flex; } .topbar { gap: 8px; flex-wrap: wrap; min-height: 0; } .topbar-title { order: 3; width: 100%; } .topbar-actions { flex-wrap: wrap; justify-content: flex-end; } .mobile-vip-status { display: flex; } }
 @media (max-width: 560px) { .topbar-actions { width: 100%; justify-content: flex-start; margin-left: 0; } }
 </style>

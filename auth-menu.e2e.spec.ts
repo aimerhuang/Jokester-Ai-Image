@@ -2,14 +2,9 @@ import { expect, test } from 'playwright/test'
 
 const baseUrl = process.env.E2E_BASE_URL || 'http://127.0.0.1:5173'
 
-test.use({
-  launchOptions: {
-    executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-  },
-})
-
 test('shows the super-admin entry immediately after login', async ({ page }) => {
   let profileRequests = 0
+  await page.setViewportSize({ width: 1280, height: 600 })
 
   await page.route('**/api/**', async (route) => {
     const request = route.request()
@@ -61,7 +56,15 @@ test('shows the super-admin entry immediately after login', async ({ page }) => 
   await expect(page.getByRole('link', { name: '兑换码生成' })).toBeVisible()
   expect(profileRequests).toBe(1)
 
+  await page.getByRole('link', { name: '积分定价' }).click()
+  await expect(page).toHaveURL(/\/pricing$/)
+  await expect(page.getByRole('heading', { name: '积分定价', exact: true })).toBeVisible()
+
   await page.getByRole('link', { name: '兑换码生成' }).click()
   await expect(page).toHaveURL(/\/admin\/redeem-codes$/)
   await expect(page.getByRole('heading', { name: '兑换码生成', exact: true })).toBeVisible()
+
+  await page.getByRole('link', { name: '账号信息' }).click()
+  await expect(page).toHaveURL(/\/profile$/)
+  await expect(page.getByRole('heading', { name: '账号信息', exact: true })).toBeVisible()
 })

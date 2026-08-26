@@ -45,12 +45,11 @@ a:hover { color: #9b342b; }
 .brand__mark {
   width: 32px;
   height: 32px;
-  display: inline-grid;
-  place-items: center;
-  border-radius: 6px;
-  background: #202322;
-  color: #ffffff;
-  font-size: 17px;
+  display: block;
+  flex: 0 0 32px;
+  border-radius: 50%;
+  background: #ffffff;
+  object-fit: contain;
 }
 
 .site-nav { display: flex; flex-wrap: wrap; gap: 18px; font-size: 14px; }

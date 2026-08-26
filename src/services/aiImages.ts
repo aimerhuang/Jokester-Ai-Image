@@ -1,7 +1,9 @@
 import { http } from './http'
+import type { AxiosRequestConfig } from 'axios'
 import type { PageQuery, PageResult } from '@/types/api'
 import type {
   AiImagePointPrice,
+  AiImagePricingEnvelope,
   CreateImageTaskRequest,
   GeneratedImageResult,
   ImageParameterApiOption,
@@ -14,57 +16,58 @@ import type {
   UploadReferenceImageResult,
 } from '@/types/image'
 
+const SIZE_MODE_CAPABILITY_CONFIG: AxiosRequestConfig = {
+  headers: { 'X-Client-Capabilities': 'ai-size-mode-v1' },
+}
+
 export function getImageParameters() {
   return http.get<unknown, ImageParametersResponse>('/ai/images/parameters')
 }
 
 export function getImageModels() {
-  return http.get<unknown, ImageParameterApiOption[]>('/ai/images/models')
+  return http.get<unknown, ImageParameterApiOption[]>('/ai/images/models', SIZE_MODE_CAPABILITY_CONFIG)
 }
 
-export function getPricingOptions() {
-  return http.get<unknown, AiImagePointPrice[]>('/ai/images/pricing-options')
+export function getPricingOptions(modelCode?: string, catalogVersion?: string) {
+  const usesSizeModeV1 = Boolean(modelCode && catalogVersion)
+  return http.get<unknown, AiImagePointPrice[] | AiImagePricingEnvelope>('/ai/images/pricing-options', usesSizeModeV1
+    ? {
+        ...SIZE_MODE_CAPABILITY_CONFIG,
+        params: { modelCode, catalogVersion },
+      }
+    : undefined)
 }
 
 export function resolveImageParameters(payload: ResolveImageParametersRequest) {
-  return http.post<unknown, ResolveImageParametersResponse>('/ai/images/parameters/resolve', payload)
+  return http.post<unknown, ResolveImageParametersResponse>(
+    '/ai/images/parameters/resolve',
+    payload,
+    payload.sizeMode ? SIZE_MODE_CAPABILITY_CONFIG : undefined,
+  )
 }
 
 export function generateImage(payload: CreateImageTaskRequest) {
-  return isNanoBananaModel(payload.modelCode)
-    ? createNanoBananaImageTask(toNanoBananaRequest(payload))
-    : createImageTask(payload)
+  return createImageTask(payload)
 }
 
 export function createImageTask(payload: CreateImageTaskRequest) {
-  return http.post<unknown, ImageTaskCreationResult>('/ai/images', payload)
-}
-
-export function createNanoBananaImageTask(payload: NanoBananaImageRequest) {
-  return http.post<unknown, ImageTaskCreationResult>('/ai/images/nanoBananaImage', payload)
+  return http.post<unknown, ImageTaskCreationResult>(
+    '/ai/images',
+    payload,
+    payload.sizeMode ? SIZE_MODE_CAPABILITY_CONFIG : undefined,
+  )
 }
 
 export function generateGptImageDirect(payload: CreateImageTaskRequest) {
-  return http.post<unknown, GeneratedImageResult>('/ai/images/generate', payload)
+  return http.post<unknown, GeneratedImageResult>(
+    '/ai/images/generate',
+    payload,
+    payload.sizeMode ? SIZE_MODE_CAPABILITY_CONFIG : undefined,
+  )
 }
 
 export function generateNanoBananaImageDirect(payload: NanoBananaImageRequest) {
   return http.post<unknown, GeneratedImageResult>('/ai/images/nanoBananaImage/generate', payload)
-}
-
-function toNanoBananaRequest(payload: CreateImageTaskRequest): NanoBananaImageRequest {
-  return {
-    idempotencyKey: payload.idempotencyKey,
-    sourcePromptId: payload.sourcePromptId,
-    prompt: payload.prompt,
-    modelCode: payload.modelCode,
-    modelName: payload.modelName,
-    resolutionCode: payload.resolutionCode,
-    aspectRatioCode: payload.aspectRatioCode || 'auto',
-    imageCount: payload.imageCount,
-    imageUrls: payload.referenceImageUrls,
-    imageAssetIds: payload.referenceAssetIds,
-  }
 }
 
 export function isNanoBananaModel(modelCode: string | undefined) {
@@ -86,8 +89,8 @@ export interface ImageRecordsQuery extends PageQuery {
   endDate?: string
 }
 
-export function getImageRecords(params: ImageRecordsQuery) {
-  return http.get<unknown, PageResult<ImageRecord>>('/ai/images', { params })
+export function getImageRecords(params: ImageRecordsQuery, config: AxiosRequestConfig = {}) {
+  return http.get<unknown, PageResult<ImageRecord>>('/ai/images', { ...config, params })
 }
 
 export function favoriteImageRecord(id: string | number, imageUrl: string, isFavorite: boolean) {
@@ -95,7 +98,7 @@ export function favoriteImageRecord(id: string | number, imageUrl: string, isFav
 }
 
 export function getImageRecord(id: string | number) {
-  return http.get<unknown, ImageRecord>(`/ai/images/${id}`)
+  return http.get<unknown, ImageRecord | null>(`/ai/images/${id}`)
 }
 
 export function deleteImageRecord(id: string | number) {

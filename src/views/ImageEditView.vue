@@ -2,8 +2,8 @@
   <div class="detail-page">
     <el-skeleton v-if="loading" :rows="10" animated />
     <section v-else-if="errorMessage" class="visual-panel page-card error-panel">
-      <EmptyState title="详情加载失败" :description="errorMessage">
-        <el-button type="primary" @click="router.push('/images')">返回画廊</el-button>
+      <EmptyState :title="app.t('imageDetail.loadFailedTitle')" :description="errorMessage">
+        <el-button type="primary" @click="router.push('/images')">{{ app.t('imageDetail.backToGallery') }}</el-button>
       </EmptyState>
     </section>
     <template v-else>
@@ -22,10 +22,10 @@
         <div v-if="imageUrl" class="image-preview-wrap">
           <el-image class="hero-image" :src="imageUrl" :preview-src-list="imageUrls" :initial-index="selectedIndex" fit="contain" preview-teleported>
             <template #error>
-              <div class="image-error">图片加载失败</div>
+              <div class="image-error">{{ app.t('imageDetail.imageLoadFailed') }}</div>
             </template>
           </el-image>
-          <div v-if="imageUrls.length > 1" class="thumbnail-strip" role="list" aria-label="Generated images">
+          <div v-if="imageUrls.length > 1" class="thumbnail-strip" role="list" :aria-label="app.t('imageDetail.thumbnailListLabel')">
             <button
               v-for="(url, index) in imageUrls"
               :key="url"
@@ -35,12 +35,12 @@
               role="listitem"
               @click="selectedIndex = index"
             >
-              <img :src="url" :alt="`Generated image ${index + 1}`" @error="hideBrokenThumbnail" />
+              <img :src="url" :alt="thumbnailAlt(index)" @error="hideBrokenThumbnail" />
               <span>{{ index + 1 }}</span>
             </button>
           </div>
         </div>
-        <EmptyState v-else :title="app.t('playground.emptyTitle')" :description="app.t('playground.emptyDescription')" />
+        <EmptyState v-else :title="taskStateTitle" :description="taskStateDescription" />
       </section>
 
       <aside class="control-panel page-card">
@@ -52,10 +52,14 @@
         <section>
           <h3>{{ app.t('imageDetail.parameters') }}</h3>
           <div class="params-grid">
-            <span>{{ app.t('playground.model') }}</span><strong>{{ record?.modelName || '-' }}</strong>
-            <span>{{ app.t('playground.resolution') }}</span><strong>{{ record?.resolutionCode || '-' }}</strong>
+            <span>{{ app.t('playground.model') }}</span><strong>{{ record?.modelCode || record?.modelName || '-' }}</strong>
+            <span>{{ app.t('imageDetail.sizeMode') }}</span><strong>{{ sizeModeText }}</strong>
+            <span>{{ app.t('imageDetail.requestedSize') }}</span><strong>{{ requestedSizeText }}</strong>
+            <span>{{ app.t('imageDetail.outputSize') }}</span><strong>{{ outputSizeText }}</strong>
             <span>{{ app.t('playground.quality') }}</span><strong>{{ record?.qualityCode || '-' }}</strong>
-            <span>{{ app.t('playground.aspectRatio') }}</span><strong>{{ record?.aspectRatioCode || '-' }}</strong>
+            <span v-if="!isNewAutoTask">{{ app.t('playground.aspectRatio') }}</span><strong v-if="!isNewAutoTask">{{ record?.requestedAspectRatioCode || record?.aspectRatioCode || '-' }}</strong>
+            <span>{{ app.t('gallery.pointCost') }}</span><strong>{{ record?.pointCost ?? '-' }}</strong>
+            <span>{{ app.t('imageDetail.billingStatus') }}</span><strong>{{ billingStatusText }}</strong>
           </div>
         </section>
 
@@ -68,8 +72,8 @@
         </section>
 
         <div class="bottom-actions">
-          <el-button type="primary" class="soft-button" @click="reuseConfig">{{ app.t('imageDetail.editImage') }}</el-button>
-          <el-button @click="reuseConfig">{{ app.t('imageDetail.reuseConfig') }}</el-button>
+          <el-button type="primary" class="soft-button" :disabled="!canReuse" @click="reuseConfig">{{ app.t('imageDetail.editImage') }}</el-button>
+          <el-button :disabled="!canReuse" @click="reuseConfig">{{ app.t('imageDetail.reuseConfig') }}</el-button>
           <el-button @click="usePrompt">{{ app.t('imageDetail.usePrompt') }}</el-button>
           <el-button @click="useAsReference">{{ app.t('imageDetail.useAsReference') }}</el-button>
         </div>
@@ -84,13 +88,16 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { useAuthenticatedImageUrls } from '@/composables/useAuthenticatedImageUrls'
+import { isProcessing, normalizeTaskStatus, useImageTaskPolling } from '@/composables/useImageTaskPolling'
 import { favoriteImageRecord, getImageRecord } from '@/services/aiImages'
 import { useAppStore } from '@/stores/app'
+import { useCreditsStore } from '@/stores/credits'
 import { downloadImage, getImageUrls, saveReuseConfig } from '@/utils/imageActions'
 import type { ApiError } from '@/types/api'
 import type { ImageRecord } from '@/types/image'
 
 const app = useAppStore()
+const credits = useCreditsStore()
 const route = useRoute()
 const router = useRouter()
 const record = ref<ImageRecord | null>(null)
@@ -98,6 +105,8 @@ const prompt = ref('')
 const loading = ref(false)
 const errorMessage = ref('')
 const selectedIndex = ref(0)
+const taskExpired = ref(false)
+let pollingErrorShown = false
 const sourceImageUrls = computed(() => getImageUrls(record.value))
 const { urls: imageUrls } = useAuthenticatedImageUrls(sourceImageUrls)
 const imageUrl = computed(() => imageUrls.value[selectedIndex.value] || '')
@@ -105,21 +114,132 @@ const sourceImageUrl = computed(() => sourceImageUrls.value[selectedIndex.value]
 const sourceReferenceImages = computed(() => record.value?.referenceImageUrls || [])
 const { urls: referenceImages } = useAuthenticatedImageUrls(sourceReferenceImages)
 const favorite = computed(() => Boolean(record.value?.favoriteUrls?.includes(sourceImageUrl.value)))
+const canReuse = computed(() => record.value?.sizeContractVersion !== 'legacy-unknown')
+const isNewAutoTask = computed(() => record.value?.sizeContractVersion === 'size-mode-v1' && record.value?.sizeMode === 'auto')
+const sizeModeText = computed(() => {
+  if (record.value?.sizeMode === 'auto') return app.t('playground.sizeModeAuto')
+  if (record.value?.sizeMode === 'explicit' || record.value?.sizeContractVersion === 'legacy-explicit-v1') return app.t('playground.sizeModeExplicit')
+  return '-'
+})
+const requestedSizeText = computed(() => {
+  if (isNewAutoTask.value) return app.t('playground.sizeModeAuto')
+  if (record.value?.sizeContractVersion === 'legacy-aspect-auto') {
+    return [record.value.resolutionCode, record.value.aspectRatioCode || 'auto'].filter(Boolean).join(' / ') || 'auto'
+  }
+  return record.value?.requestedSize
+    || [record.value?.requestedResolutionCode ?? record.value?.resolutionCode, record.value?.requestedAspectRatioCode ?? record.value?.aspectRatioCode]
+      .filter(Boolean)
+      .join(' / ')
+    || '-'
+})
+const outputSizeText = computed(() => {
+  const width = record.value?.outputWidth
+  const height = record.value?.outputHeight
+  if (isPositiveDimension(width) && isPositiveDimension(height)) return `${width}x${height}`
+  const outputSize = String(record.value?.outputSize || '').trim()
+  if (outputSize && outputSize !== '0x0') return outputSize
+  return app.t('gallery.actualSizeUnknown')
+})
+const billingStatusText = computed(() => {
+  if (!record.value) return '-'
+  const keys: Record<number, string> = {
+    0: 'gallery.billingReserved',
+    1: 'gallery.billingConfirmed',
+    2: 'gallery.billingPartialRefund',
+    3: 'gallery.billingFullRefundSettled',
+  }
+  const key = keys[Number(record.value.billingStatus)]
+  return key ? app.t(key) : app.t('gallery.billingUnknown')
+})
+const taskStateTitle = computed(() => {
+  if (taskExpired.value) return app.t('imageDetail.taskExpiredTitle')
+  const status = record.value ? normalizeTaskStatus(record.value) : ''
+  if (status === 'queued') return app.t('gallery.taskQueued')
+  if (status === 'processing') return app.t('gallery.taskProcessing')
+  if (status === 'failed') return app.t('gallery.taskFailed')
+  if (status === 'cancelled') return app.t('gallery.taskCancelled')
+  return app.t('gallery.taskPending')
+})
+const taskStateDescription = computed(() => {
+  if (taskExpired.value) return app.t('imageDetail.taskExpiredDescription')
+  const status = record.value ? normalizeTaskStatus(record.value) : ''
+  return status === 'queued' || status === 'processing'
+    ? app.t('imageDetail.taskProcessingDescription')
+    : app.t('playground.failureSettlementNotice')
+})
+const { start: startTaskPolling } = useImageTaskPolling({
+  onUpdate: (task) => {
+    pollingErrorShown = false
+    applyRecord(task as ImageRecord)
+  },
+  onSuccess: (task) => {
+    applyRecord(task as ImageRecord)
+    void refreshCreditData()
+  },
+  onFailure: (task) => {
+    applyRecord(task as ImageRecord)
+    ElMessage.warning(app.t('playground.failureSettlementNotice'))
+    void refreshCreditData()
+  },
+  onExpired: () => {
+    taskExpired.value = true
+    ElMessage.warning(app.t('playground.generationExpired'))
+    void refreshCreditData()
+  },
+  onUnavailable: () => {
+    errorMessage.value = app.t('imageDetail.unavailable')
+    void refreshCreditData()
+  },
+  onError: (error) => {
+    if (pollingErrorShown) return
+    pollingErrorShown = true
+    ElMessage.error(withRequestId(app.t('imageDetail.taskStatusUnavailable'), error))
+  },
+})
 
 onMounted(async () => {
   loading.value = true
   errorMessage.value = ''
   try {
     const detail = await getImageRecord(String(route.params.id))
-    record.value = detail
-    prompt.value = detail.prompt || ''
-    selectInitialImage()
+    if (!detail) {
+      errorMessage.value = app.t('imageDetail.unavailable')
+      return
+    }
+    applyRecord(detail)
+    if (isProcessing(detail)) {
+      startTaskPolling(detail.taskId || detail.id, {
+        expiresAt: taskExpiration(detail),
+        imageCount: detail.imageCount,
+      })
+    }
   } catch (error) {
-    errorMessage.value = (error as ApiError).message || '图片详情加载失败，请返回画廊重试。'
+    errorMessage.value = withRequestId(app.t('imageDetail.loadFailedDescription'), error)
   } finally {
     loading.value = false
   }
 })
+
+function applyRecord(detail: ImageRecord) {
+  const firstLoad = !record.value
+  record.value = detail
+  if (firstLoad) {
+    prompt.value = detail.prompt || ''
+    selectInitialImage()
+  } else if (selectedIndex.value >= sourceImageUrls.value.length) {
+    selectedIndex.value = 0
+  }
+}
+
+function taskExpiration(detail: ImageRecord) {
+  const serverExpiration = detail.expiresAt ? Date.parse(detail.expiresAt) : Number.NaN
+  if (Number.isFinite(serverExpiration)) return serverExpiration
+  return Date.now() + Math.min(Math.max(1, detail.imageCount || 1) * 5 * 60 * 1000, 10 * 60 * 1000)
+}
+
+function refreshCreditData() {
+  return Promise.allSettled([credits.fetchSummary(), credits.fetchRecords()])
+}
 
 function selectInitialImage() {
   const urls = sourceImageUrls.value
@@ -169,27 +289,53 @@ async function toggleFavorite() {
     currentRecord.favoriteUrls = previousFavoriteUrls
     currentRecord.isFavorite = previousFavoriteUrls.length > 0
     currentRecord.favorite = currentRecord.isFavorite
-    ElMessage.error((error as ApiError).message)
+    ElMessage.error(withRequestId(app.t('imageDetail.favoriteUpdateFailed'), error))
   }
+}
+
+function thumbnailAlt(index: number) {
+  return app.t('imageDetail.thumbnailAlt').replace('{index}', String(index + 1))
+}
+
+function withRequestId(message: string, error: unknown) {
+  const requestId = (error as Partial<ApiError> | undefined)?.requestId
+  return requestId ? `${message} (${app.t('imageDetail.requestId')}: ${requestId})` : message
 }
 
 function currentConfig() {
   if (!record.value) return null
+  const usesNewAuto = record.value.sizeContractVersion === 'size-mode-v1' && record.value.sizeMode === 'auto'
   return {
     prompt: prompt.value,
     modelName: record.value.modelName,
-    resolutionCode: record.value.resolutionCode,
+    modelCode: record.value.modelCode,
+    sizeContractVersion: record.value.sizeContractVersion,
+    sizeMode: record.value.sizeContractVersion === 'size-mode-v1' ? record.value.sizeMode : null,
+    catalogVersion: record.value.catalogVersion,
+    resolutionCode: usesNewAuto
+      ? undefined
+      : record.value.requestedResolutionCode || record.value.resolutionCode || undefined,
     qualityCode: record.value.qualityCode,
-    aspectRatioCode: record.value.aspectRatioCode,
+    aspectRatioCode: usesNewAuto
+      ? undefined
+      : record.value.requestedAspectRatioCode || record.value.aspectRatioCode || undefined,
     referenceImageUrls: record.value.referenceImageUrls || [],
   }
 }
 
 function reuseConfig() {
+  if (!canReuse.value) {
+    ElMessage.warning(app.t('imageDetail.reuseUnavailable'))
+    return
+  }
   const config = currentConfig()
   if (!config) return
   saveReuseConfig(config)
   router.push('/playground')
+}
+
+function isPositiveDimension(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
 
 async function usePrompt() {

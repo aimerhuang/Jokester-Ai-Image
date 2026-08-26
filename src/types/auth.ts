@@ -1,3 +1,9 @@
+export interface UserMembership {
+  tierCode: string
+  status: string
+  expiresAt: string
+}
+
 export interface UserProfile {
   id: number
   userName: string
@@ -7,6 +13,7 @@ export interface UserProfile {
   signature?: string | null
   pointBalance: number
   isSuperAdmin: boolean
+  membership?: UserMembership | null
 }
 
 export interface SiteAccess {
@@ -32,34 +39,17 @@ export interface LoginResult {
 }
 
 export interface RegisterRequest {
-  userName: string
-  nickName: string
-  password: string
   email: string
   emailCode: string
-  acceptedPrivacyPolicy: true
-  privacyPolicyVersion: string
-  acceptedTermsOfService: true
-  termsOfServiceVersion: string
-  clientPlatform: 'web'
-  locale: string
+  password: string
 }
 
 export interface RegisterResult {
   userId: number
 }
 
-export interface CaptchaChallenge {
-  captchaId: string
-  imageBase64: string
-  mimeType: string
-  expiresInSeconds: number
-}
-
 export interface SendRegisterEmailCodeRequest {
   email: string
-  captchaId: string
-  captchaAnswer: string
 }
 
 export interface SendEmailCodeResult {

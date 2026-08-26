@@ -7,6 +7,7 @@
       </div>
 
       <div class="header-actions">
+        <MonthlyVipBadge :membership="auth.user?.membership" />
         <span class="balance-pill">
           <span>{{ app.t('recharge.currentBalance') }}</span>
           <strong>{{ formatPoints(credits.summary.balance) }}</strong>
@@ -41,10 +42,11 @@
         <div class="plan-heading">
           <h3>{{ plan.displayName }}</h3>
           <div class="points-row">
-            <strong>{{ formatPoints(plan.points) }}</strong>
+            <strong>{{ formatPoints(plan.displayPoints) }}</strong>
             <span>{{ app.t('recharge.points') }}</span>
           </div>
           <p>{{ plan.displayDescription }}</p>
+          <span v-if="plan.eligibilityHint" class="eligibility-hint">{{ plan.eligibilityHint }}</span>
         </div>
 
         <ul class="plan-benefits">
@@ -57,7 +59,7 @@
         <div class="plan-footer">
           <div class="price-row">
             <span>{{ app.t('recharge.priceLabel') }}</span>
-            <strong><small>{{ currencySymbol(plan.currency) }}</small>{{ formatPrice(plan.priceAmount) }}</strong>
+            <strong>{{ formatPrice(plan.priceAmount, plan.currency) }}</strong>
             <span>{{ plan.validity }}</span>
           </div>
           <el-button
@@ -65,10 +67,10 @@
             :type="plan.isFeatured ? 'warning' : 'primary'"
             size="large"
             :loading="credits.purchasingPackageCode === plan.code"
-            :disabled="Boolean(credits.purchasingPackageCode)"
+            :disabled="!plan.purchaseEnabled || orderOutcomeUnknown || Boolean(credits.purchasingPackageCode) || purchaseRetrySeconds > 0"
             @click="buyPlan(plan)"
           >
-            <span>{{ app.t('recharge.buyNow') }}</span>
+            <span>{{ buyButtonText(plan) }}</span>
             <el-icon><ArrowRight /></el-icon>
           </el-button>
         </div>
@@ -103,6 +105,9 @@
             size="large"
             clearable
             maxlength="80"
+            autocomplete="off"
+            autocapitalize="none"
+            :spellcheck="false"
             :placeholder="app.t('recharge.redeemPlaceholder')"
             @keyup.enter="redeemCode"
           >
@@ -113,10 +118,10 @@
           class="redeem-submit"
           size="large"
           :loading="credits.redeeming"
-          :disabled="!code.trim()"
+          :disabled="!code.trim() || redeemOutcomeUnknown || redeemRetrySeconds > 0"
           @click="redeemCode"
         >
-          {{ app.t('recharge.redeemConfirm') }}
+          {{ redeemOutcomeUnknown ? app.t('recharge.resultUnknownButton') : redeemRetrySeconds ? rateLimitText(redeemRetrySeconds) : app.t('recharge.redeemConfirm') }}
         </el-button>
       </el-form>
 
@@ -140,63 +145,60 @@
       <dl v-if="createdOrder" class="order-summary">
         <div><dt>{{ app.t('recharge.orderNumber') }}</dt><dd>{{ createdOrder.orderNo }}</dd></div>
         <div><dt>{{ app.t('recharge.points') }}</dt><dd>{{ formatPoints(createdOrder.points) }}</dd></div>
-        <div><dt>{{ app.t('recharge.price') }}</dt><dd>{{ currencySymbol(createdOrder.currency) }}{{ formatPrice(createdOrder.priceAmount) }}</dd></div>
+        <div><dt>{{ app.t('recharge.price') }}</dt><dd>{{ formatPrice(createdOrder.priceAmount, createdOrder.currency) }}</dd></div>
+        <div><dt>{{ app.t('recharge.orderExpiresAt') }}</dt><dd>{{ formatDateTime(createdOrder.expiresAt) }}</dd></div>
       </dl>
       <el-alert :title="app.t('recharge.orderPendingPayment')" type="warning" :closable="false" show-icon />
       <template #footer>
         <el-button type="primary" @click="orderVisible = false">{{ app.t('common.confirm') }}</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="redeemResultVisible"
+      :title="app.t('recharge.redeemResultTitle')"
+      width="min(480px, calc(100vw - 32px))"
+      align-center
+    >
+      <dl v-if="redeemResult" class="order-summary redeem-result-summary">
+        <div><dt>{{ app.t('recharge.addedPoints') }}</dt><dd class="result-points">+{{ formatPoints(redeemResult.addedPoints) }}</dd></div>
+        <div><dt>{{ app.t('recharge.latestBalance') }}</dt><dd>{{ formatPoints(redeemResult.availablePoints) }}</dd></div>
+        <div>
+          <dt>{{ app.t(redeemResult.expiresAt ? 'recharge.redeemValidUntil' : 'recharge.creditValidity') }}</dt>
+          <dd>{{ redeemResult.expiresAt ? formatDateTime(redeemResult.expiresAt) : app.t('recharge.permanent') }}</dd>
+        </div>
+        <div><dt>{{ app.t('recharge.redeemedAt') }}</dt><dd>{{ formatDateTime(redeemResult.redeemedAt) }}</dd></div>
+      </dl>
+      <template #footer>
+        <el-button type="primary" @click="redeemResultVisible = false">{{ app.t('common.confirm') }}</el-button>
+      </template>
+    </el-dialog>
   </main>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ArrowRight, CircleCheckFilled, Close, Coin, Ticket, User } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
+import MonthlyVipBadge from '@/components/common/MonthlyVipBadge.vue'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useCreditsStore } from '@/stores/credits'
 import type { ApiError } from '@/types/api'
-import type { RechargeOrder, RechargePackage } from '@/types/credits'
-
-interface PackageCopy {
-  name: string
-  description: string
-  benefits: string[]
-}
+import type { RechargeOrder, RechargePackage, RedeemPointCodeResult } from '@/types/credits'
 
 interface RechargePlanView extends RechargePackage {
   displayName: string
   displayDescription: string
   displayBenefits: string[]
+  displayPoints: number
   badge: string
   validity: string
+  eligibilityHint: string
 }
 
-const packageCopy: Record<string, PackageCopy> = {
-  monthly: {
-    name: 'recharge.monthlyCard',
-    description: 'recharge.monthlyDescription',
-    benefits: ['recharge.monthlyPerk1', 'recharge.monthlyPerk2', 'recharge.monthlyPerk3', 'recharge.monthlyPerk4'],
-  },
-  trial: {
-    name: 'recharge.trialPack',
-    description: 'recharge.trialDescription',
-    benefits: ['recharge.trialPerk1', 'recharge.trialPerk2', 'recharge.trialPerk3', 'recharge.trialPerk4'],
-  },
-  basic: {
-    name: 'recharge.basicPack',
-    description: 'recharge.basicDescription',
-    benefits: ['recharge.basicPerk1', 'recharge.basicPerk2', 'recharge.basicPerk3', 'recharge.basicPerk4'],
-  },
-  value: {
-    name: 'recharge.valuePack',
-    description: 'recharge.valueDescription',
-    benefits: ['recharge.valuePerk1', 'recharge.valuePerk2', 'recharge.valuePerk3', 'recharge.valuePerk4'],
-  },
-}
+const WEB_PACKAGE_CODES = new Set(['monthly', 'trial', 'basic', 'value'])
 
 const badgeCopy: Record<string, string> = {
   recommended: 'recharge.recommended',
@@ -211,22 +213,33 @@ const credits = useCreditsStore()
 const router = useRouter()
 const redeemVisible = ref(false)
 const orderVisible = ref(false)
+const redeemResultVisible = ref(false)
 const code = ref('')
 const createdOrder = ref<RechargeOrder | null>(null)
+const redeemResult = ref<RedeemPointCodeResult | null>(null)
+const purchaseRetrySeconds = ref(0)
+const redeemRetrySeconds = ref(0)
+const orderOutcomeUnknown = ref(false)
+const redeemOutcomeUnknown = ref(false)
+let rateLimitTimer: ReturnType<typeof setInterval> | null = null
 
 const redeemAccount = computed(() => auth.user?.email || auth.user?.userName || '-')
-const plans = computed<RechargePlanView[]>(() => credits.rechargePackages.map((plan) => {
-  const copy = packageCopy[plan.code]
+const plans = computed<RechargePlanView[]>(() => credits.rechargePackages
+  .filter((plan) => WEB_PACKAGE_CODES.has(plan.code))
+  .sort((a, b) => (a.sort || 0) - (b.sort || 0))
+  .map((plan) => {
   const badgeKey = plan.badgeCode ? badgeCopy[plan.badgeCode] : ''
   return {
     ...plan,
-    displayName: copy ? app.t(copy.name) : plan.name,
-    displayDescription: copy ? app.t(copy.description) : (plan.description || ''),
-    displayBenefits: copy ? copy.benefits.map((key) => app.t(key)) : plan.benefits,
-    badge: badgeKey ? app.t(badgeKey) : '',
-    validity: plan.validityDays
-      ? `${plan.validityDays}${app.t('recharge.daysUnit')}`
-      : app.t('recharge.permanent'),
+    displayName: plan.name,
+    displayDescription: plan.description || '',
+    displayBenefits: plan.benefits || [],
+    displayPoints: plan.code === 'monthly' ? 5000 : plan.points,
+    badge: badgeKey ? app.t(badgeKey) : (plan.badgeCode || ''),
+    validity: plan.code === 'monthly' ? app.t('recharge.monthlyValidity') : app.t('recharge.permanent'),
+    eligibilityHint: plan.code === 'trial'
+      ? app.t(plan.isFirstPurchaseEligible ? 'recharge.trialFirstEligible' : 'recharge.trialRepeatEligible')
+      : '',
   }
 }))
 
@@ -236,6 +249,12 @@ onMounted(() => {
     credits.fetchSummary(),
     loadPackages(),
   ])
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  clearRateLimitTimer()
 })
 
 function closePage() {
@@ -245,37 +264,66 @@ function closePage() {
 
 async function loadPackages() {
   try {
-    await credits.fetchRechargePackages()
+    await credits.fetchRechargePackages('web')
   } catch (error) {
-    ElMessage.error((error as ApiError).message || app.t('recharge.packagesLoadFailed'))
+    const apiError = error as ApiError
+    ElMessage.error(withRequestId(resolveActionError(apiError, app.t('recharge.packagesLoadFailed')), apiError.requestId))
   }
 }
 
 async function buyPlan(plan: RechargePackage) {
+  if (!plan.purchaseEnabled || orderOutcomeUnknown.value || credits.purchasingPackageCode || purchaseRetrySeconds.value > 0) return
   try {
     const order = await credits.createRechargeOrder(plan.code)
     createdOrder.value = order
-    if (order.purchaseUrl) {
-      window.location.assign(order.purchaseUrl)
+    const purchaseUrl = getSafePurchaseUrl(order.purchaseUrl)
+    if (purchaseUrl) {
+      window.location.assign(purchaseUrl)
       return
     }
     orderVisible.value = true
   } catch (error) {
-    ElMessage.error((error as ApiError).message || app.t('recharge.purchaseFailed'))
+    const apiError = error as ApiError
+    if (isRateLimited(apiError)) {
+      startRateLimit('purchase', apiError.retryAfterSeconds)
+      ElMessage.warning(rateLimitText(purchaseRetrySeconds.value))
+      return
+    }
+    if (isUnknownOutcome(apiError)) orderOutcomeUnknown.value = true
+    ElMessage.error(withRequestId(
+      orderOutcomeUnknown.value ? app.t('recharge.orderResultUnknown') : resolveActionError(apiError, app.t('recharge.purchaseFailed')),
+      apiError.requestId,
+    ))
   }
 }
 
 async function redeemCode() {
   const value = code.value.trim()
-  if (!value || credits.redeeming) return
+  if (!value || credits.redeeming || redeemOutcomeUnknown.value || redeemRetrySeconds.value > 0) return
   try {
     const result = await credits.redeemPointCode(value)
+    redeemResult.value = result
     code.value = ''
     redeemVisible.value = false
-    ElMessage.success(`${app.t('recharge.redeemSuccess')} +${formatPoints(result.addedPoints)}`)
+    redeemResultVisible.value = true
     await Promise.allSettled([auth.fetchCurrentUser(), credits.fetchRechargePackages()])
   } catch (error) {
-    ElMessage.error((error as ApiError).message || app.t('recharge.redeemFailed'))
+    const apiError = error as ApiError
+    if (isRateLimited(apiError)) {
+      startRateLimit('redeem', apiError.retryAfterSeconds)
+      ElMessage.warning(rateLimitText(redeemRetrySeconds.value))
+      return
+    }
+    if (isUnknownOutcome(apiError)) {
+      redeemOutcomeUnknown.value = true
+      ElMessage.warning(app.t('recharge.redeemResultUnknown'))
+      await Promise.allSettled([credits.fetchSummary(), credits.fetchRecords(), credits.fetchRechargePackages('web')])
+      return
+    }
+    const message = apiError.status === 400
+      ? app.t('recharge.redeemInvalid')
+      : resolveActionError(apiError, app.t('recharge.redeemFailed'))
+    ElMessage.error(withRequestId(message, apiError.requestId))
   }
 }
 
@@ -283,12 +331,86 @@ function formatPoints(value: number) {
   return new Intl.NumberFormat(app.locale).format(value)
 }
 
-function formatPrice(value: number) {
-  return value.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
+function formatPrice(value: number, currency: string) {
+  try {
+    return new Intl.NumberFormat(app.locale, {
+      style: 'currency',
+      currency: currency.toUpperCase(),
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(value)
+  } catch {
+    return `${currency} ${value}`
+  }
 }
 
-function currencySymbol(currency: string) {
-  return currency.toUpperCase() === 'CNY' ? '\u00a5' : `${currency} `
+function formatDateTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value || '-'
+  return new Intl.DateTimeFormat(app.locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
+function buyButtonText(plan: RechargePackage) {
+  if (!plan.purchaseEnabled) return app.t('recharge.purchaseUnavailable')
+  if (orderOutcomeUnknown.value) return app.t('recharge.resultUnknownButton')
+  if (purchaseRetrySeconds.value) return rateLimitText(purchaseRetrySeconds.value)
+  return app.t('recharge.buyNow')
+}
+
+function rateLimitText(seconds: number) {
+  return app.t('recharge.rateLimitCountdown').replace('{seconds}', String(seconds))
+}
+
+function startRateLimit(target: 'purchase' | 'redeem', seconds?: number) {
+  const value = Math.max(1, Math.ceil(Number(seconds) || 1))
+  if (target === 'purchase') purchaseRetrySeconds.value = value
+  else redeemRetrySeconds.value = value
+  if (rateLimitTimer) return
+  rateLimitTimer = window.setInterval(() => {
+    purchaseRetrySeconds.value = Math.max(0, purchaseRetrySeconds.value - 1)
+    redeemRetrySeconds.value = Math.max(0, redeemRetrySeconds.value - 1)
+    if (!purchaseRetrySeconds.value && !redeemRetrySeconds.value) clearRateLimitTimer()
+  }, 1000)
+}
+
+function clearRateLimitTimer() {
+  if (rateLimitTimer) window.clearInterval(rateLimitTimer)
+  rateLimitTimer = null
+}
+
+function isRateLimited(error: ApiError) {
+  return error.status === 429 || String(error.code).toUpperCase() === 'RATE_LIMITED'
+}
+
+function isUnknownOutcome(error: ApiError) {
+  return !error.status || [408, 502, 504].includes(error.status)
+}
+
+function withRequestId(message: string, requestId?: string) {
+  return requestId ? `${message} (${app.t('recharge.requestId')}: ${requestId})` : message
+}
+
+function resolveActionError(error: ApiError, fallback: string) {
+  const code = String(error.code || '').toUpperCase()
+  if (error.status === 409 || code === 'IDEMPOTENCY_CONFLICT') return app.t('recharge.operationConflict')
+  if (error.status === 403 || code === 'RESOURCE_FORBIDDEN') return app.t('recharge.actionForbidden')
+  if (error.status === 500 || error.status === 503) return app.t('recharge.serviceUnavailable')
+  return fallback
+}
+
+function getSafePurchaseUrl(value?: string | null) {
+  if (!value) return ''
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : ''
+  } catch {
+    return ''
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState !== 'visible') return
+  void Promise.allSettled([credits.fetchSummary(), credits.fetchRechargePackages('web')])
 }
 </script>
 
@@ -344,6 +466,7 @@ function currencySymbol(currency: string) {
 .plan-card--featured .points-row strong { color: #e88c00; }
 .points-row span { align-self: flex-end; margin-bottom: 8px; color: var(--color-text-muted); font-size: 12px; font-weight: 700; }
 .plan-heading p { min-height: 42px; margin: 18px 0 0; color: var(--color-text-muted); font-size: 14px; font-weight: 600; line-height: 1.5; }
+.eligibility-hint { display: block; margin-top: 10px; color: var(--color-primary-hover); font-size: 12px; font-weight: 700; line-height: 1.5; }
 .plan-benefits { margin: 18px 0 0; padding: 20px 0 0; border-top: 1px solid var(--color-border); display: grid; gap: 14px; list-style: none; }
 .plan-benefits li { align-items: flex-start; gap: 10px; color: var(--color-text); font-size: 13px; line-height: 1.5; }
 .plan-benefits .el-icon { flex: 0 0 auto; margin-top: 2px; color: #38a881; }
@@ -370,6 +493,8 @@ function currencySymbol(currency: string) {
 .order-summary div { min-width: 0; display: flex; justify-content: space-between; gap: 16px; }
 .order-summary dt { color: var(--color-text-muted); }
 .order-summary dd { margin: 0; max-width: 70%; overflow-wrap: anywhere; text-align: right; font-weight: 700; }
+.redeem-result-summary { margin-bottom: 0; }
+.redeem-result-summary .result-points { color: var(--color-primary); font-size: 20px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 :deep(.redeem-dialog .el-dialog__title) { display: block; width: 100%; text-align: center; font-weight: 800; }

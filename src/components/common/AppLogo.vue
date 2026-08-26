@@ -1,6 +1,6 @@
 <template>
   <div class="app-logo">
-    <div class="app-logo__mark">J</div>
+    <img class="app-logo__mark" src="/logo-black-512.png" alt="" aria-hidden="true" />
     <div>
       <strong>{{ app.t('app.name') }}</strong>
       <span>{{ app.t('app.tagline') }}</span>
@@ -17,7 +17,7 @@ const app = useAppStore()
 <style scoped>
 .app-logo { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .app-logo > div:last-child { min-width: 0; }
-.app-logo__mark { width: 42px; height: 42px; flex: 0 0 42px; display: grid; place-items: center; border-radius: 14px; background: var(--color-primary); color: #fff; font-weight: 800; box-shadow: var(--shadow-primary); }
+.app-logo__mark { width: 42px; height: 42px; flex: 0 0 42px; display: block; border-radius: 50%; background: #fff; object-fit: contain; box-shadow: var(--shadow-card); }
 strong, span { display: block; overflow-wrap: anywhere; }
 strong { font-size: 16px; }
 span { color: var(--color-text-muted); font-size: 12px; margin-top: 2px; line-height: 1.35; }

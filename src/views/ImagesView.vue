@@ -62,23 +62,33 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ImageCard from '@/components/images/ImageCard.vue'
+import { isFailure, isProcessing, isSuccess, normalizeTaskStatus } from '@/composables/useImageTaskPolling'
 import { deleteImageRecord, favoriteImageRecord, getImageRecords } from '@/services/aiImages'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
+import { useCreditsStore } from '@/stores/credits'
 import { useImageOptionsStore } from '@/stores/imageOptions'
 import { getImageUrls } from '@/utils/imageActions'
+import {
+  clearImageTaskHistoryRecovery,
+  readImageTaskHistoryRecovery,
+  type ImageTaskHistoryRecovery,
+} from '@/utils/imageTaskRecovery'
 import type { ApiError } from '@/types/api'
 import type { ImageRecord } from '@/types/image'
 
 type FavoriteFilter = 'all' | 'favorite'
 
 const app = useAppStore()
+const auth = useAuthStore()
 const router = useRouter()
 const optionsStore = useImageOptionsStore()
+const credits = useCreditsStore()
 const records = ref<ImageRecord[]>([])
 const total = ref(0)
 const pageIndex = ref(1)
@@ -92,11 +102,18 @@ const filters = reactive<{ model: string; dates: [string, string] | null; favori
   dates: null,
   favorite: 'all',
 })
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+let listRequestId = 0
+let historyRecovery: ImageTaskHistoryRecovery | null = null
+const RECOVERY_CLOCK_SKEW_MS = 60_000
 
 const modelOptions = computed(() => optionsStore.options.models || [])
 const hasActiveFilters = computed(() => Boolean(searchKeyword.value.trim() || filters.model || filters.dates || filters.favorite === 'favorite'))
 const galleryItems = computed(() => records.value.flatMap((record) => {
   const urls = filters.favorite === 'favorite' ? record.favoriteUrls : getImageUrls(record)
+  if (!urls.length && filters.favorite !== 'favorite') {
+    return [{ key: `${record.id}:task`, record, imageUrl: '', favorite: false }]
+  }
   return [...new Set(urls)].map((imageUrl) => ({
     key: `${record.id}:${imageUrl}`,
     record,
@@ -114,12 +131,23 @@ watch(searchKeyword, () => {
 })
 
 onMounted(() => {
+  historyRecovery = readImageTaskHistoryRecovery(auth.user?.id ?? null)
   void optionsStore.fetchOptions().catch(() => undefined)
-  fetchList()
+  void fetchList()
+})
+onBeforeUnmount(() => {
+  ++listRequestId
+  clearPolling()
 })
 
 async function fetchList() {
-  loading.value = true
+  return loadList(true)
+}
+
+async function loadList(showLoading: boolean) {
+  const requestId = ++listRequestId
+  clearPolling()
+  if (showLoading) loading.value = true
   try {
     const [startDate, endDate] = filters.dates || []
     const result = await getImageRecords({
@@ -131,13 +159,106 @@ async function fetchList() {
       endDate,
       modelName: filters.model || undefined,
     })
+    if (requestId !== listRequestId) return
+    const previousProcessingIds = new Set(records.value.filter(isProcessing).map(taskKey))
+    const nextProcessingIds = new Set(result.items.filter(isProcessing).map(taskKey))
     records.value = result.items
     total.value = result.total
+    const recoverySettled = settleHistoryRecovery(result.items)
+    schedulePolling(result.items)
+    if (!recoverySettled && [...previousProcessingIds].some((id) => !nextProcessingIds.has(id))) {
+      void refreshCreditData()
+    }
   } catch (error) {
-    ElMessage.error((error as ApiError).message)
+    if (requestId !== listRequestId) return
+    if (showLoading) ElMessage.error(withRequestId(app.t('gallery.loadFailed'), error))
+    schedulePolling(records.value)
   } finally {
-    loading.value = false
+    if (requestId === listRequestId && showLoading) loading.value = false
   }
+}
+
+function schedulePolling(items: ImageRecord[]) {
+  const processing = items.filter(isProcessing)
+  if (historyRecovery && Date.now() >= historyRecovery.expiresAt) {
+    finishHistoryRecovery()
+    return
+  }
+  if (!processing.length && !historyRecovery) return
+  const delay = !processing.length || processing.some((item) => normalizeTaskStatus(item) === 'queued') ? 3000 : 5000
+  const recoveryDelay = historyRecovery
+    ? Math.max(0, Math.min(delay, historyRecovery.expiresAt - Date.now()))
+    : delay
+  pollTimer = window.setTimeout(() => {
+    pollTimer = null
+    void loadList(false)
+  }, recoveryDelay)
+}
+
+function settleHistoryRecovery(items: ImageRecord[]) {
+  if (!historyRecovery) return false
+  if (Date.now() >= historyRecovery.expiresAt) {
+    finishHistoryRecovery()
+    return true
+  }
+
+  const candidateTasks = items.filter((item) => {
+    const createdAt = Date.parse(item.createdAt)
+    const modelKeys = [item.modelCode, item.modelName].map(normalizeRecoveryKey).filter(Boolean)
+    const taskId = taskKey(item)
+    const sourcePromptId = typeof item.sourcePromptId === 'number' ? item.sourcePromptId : null
+    return historyRecovery!.baselineCaptured
+      && !historyRecovery!.baselineTaskIds.includes(taskId)
+      && Number.isFinite(createdAt)
+      && createdAt >= historyRecovery!.startedAt - RECOVERY_CLOCK_SKEW_MS
+      && item.prompt === historyRecovery!.prompt
+      && item.imageCount === historyRecovery!.imageCount
+      && historyRecovery!.modelKeys.some((key) => modelKeys.includes(normalizeRecoveryKey(key)))
+      && matchesRecoverySize(item, historyRecovery!)
+      && normalizeRecoveryKey(item.qualityCode) === normalizeRecoveryKey(historyRecovery!.qualityCode)
+      && (Array.isArray(item.referenceImageUrls) ? item.referenceImageUrls.length : 0) === historyRecovery!.referenceCount
+      && sourcePromptId === historyRecovery!.sourcePromptId
+  })
+  if (!candidateTasks.length || candidateTasks.some(isProcessing)) return false
+  if (!candidateTasks.some((item) => isSuccess(item) || isFailure(item))) return false
+  finishHistoryRecovery()
+  return true
+}
+
+function matchesRecoverySize(item: ImageRecord, recovery: ImageTaskHistoryRecovery) {
+  if (recovery.sizeMode) {
+    if (item.sizeMode !== recovery.sizeMode) return false
+    if (recovery.sizeContractVersion && item.sizeContractVersion !== recovery.sizeContractVersion) return false
+    if (recovery.sizeMode === 'auto') return true
+    return normalizeRecoveryKey(item.requestedResolutionCode ?? item.resolutionCode ?? '') === normalizeRecoveryKey(recovery.resolutionCode)
+      && normalizeRecoveryKey(item.requestedAspectRatioCode ?? item.aspectRatioCode ?? '') === normalizeRecoveryKey(recovery.aspectRatioCode)
+  }
+  return normalizeRecoveryKey(item.resolutionCode ?? '') === normalizeRecoveryKey(recovery.resolutionCode)
+    && normalizeRecoveryKey(item.aspectRatioCode ?? '') === normalizeRecoveryKey(recovery.aspectRatioCode)
+}
+
+function normalizeRecoveryKey(value: string | undefined) {
+  return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '')
+}
+
+function finishHistoryRecovery() {
+  historyRecovery = null
+  clearImageTaskHistoryRecovery()
+  clearPolling()
+  void refreshCreditData()
+}
+
+function refreshCreditData() {
+  return Promise.allSettled([credits.fetchSummary(), credits.fetchRecords()])
+}
+
+function clearPolling() {
+  if (pollTimer) window.clearTimeout(pollTimer)
+  pollTimer = null
+}
+
+function taskKey(record: ImageRecord) {
+  return String(record.taskId || record.id)
 }
 
 function applySearch() {
@@ -169,7 +290,7 @@ async function toggleFavorite(record: ImageRecord, imageUrl: string) {
     record.favoriteUrls = previousFavoriteUrls
     record.isFavorite = previousFavoriteUrls.length > 0
     record.favorite = record.isFavorite
-    ElMessage.error((error as ApiError).message)
+    ElMessage.error(withRequestId(app.t('gallery.favoriteUpdateFailed'), error))
   }
 }
 
@@ -185,8 +306,13 @@ async function remove(record: ImageRecord) {
     if (records.value.length === 1 && pageIndex.value > 1) pageIndex.value -= 1
     await fetchList()
   } catch (error) {
-    if (error !== 'cancel' && error !== 'close') ElMessage.error((error as ApiError).message)
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(withRequestId(app.t('gallery.deleteFailed'), error))
   }
+}
+
+function withRequestId(message: string, error: unknown) {
+  const requestId = (error as Partial<ApiError> | undefined)?.requestId
+  return requestId ? `${message} (${app.t('gallery.requestId')}: ${requestId})` : message
 }
 </script>
 

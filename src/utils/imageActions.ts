@@ -1,4 +1,4 @@
-import type { ImageRecord } from '@/types/image'
+import type { GeneratedImageBatchItem, ImageRecord, ImageSizeMode } from '@/types/image'
 import { fetchMediaBlob, isAuthenticatedMediaUrl } from '@/utils/authenticatedMedia'
 
 export const FAVORITES_STORAGE_KEY = 'jokester:image:favorites'
@@ -8,6 +8,10 @@ export interface ReuseImageConfig {
   prompt?: string
   sourcePromptId?: number
   modelName?: string
+  modelCode?: string
+  sizeContractVersion?: string
+  sizeMode?: ImageSizeMode | null
+  catalogVersion?: string | null
   resolutionCode?: string
   qualityCode?: string
   aspectRatioCode?: string
@@ -28,6 +32,7 @@ type ImageUrlSource = {
   urls?: string[] | string
   images?: Array<string | ImageUrlObject> | string
   assets?: Array<string | ImageUrlObject> | string
+  results?: GeneratedImageBatchItem[]
   base64?: string
   mimeType?: string
 }
@@ -90,6 +95,7 @@ export function getImageUrls(record?: ImageUrlSource | null) {
     record.urls,
     record.images,
     record.assets,
+    record.results?.filter((item) => !item.isDeleted && item.status === 'succeeded').map((item) => item.url || ''),
     record.base64 ? `data:${record.mimeType || 'image/png'};base64,${record.base64}` : '',
   ].flatMap(readImageUrls)
   return uniqueUrls(urls)

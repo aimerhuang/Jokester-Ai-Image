@@ -83,6 +83,10 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const promptImageProxyTarget = env.VITE_PROMPT_IMAGE_PROXY_TARGET?.trim()
   const promptImageRoot = (env.VITE_PROMPT_IMAGE_ROOT || env.PROMPT_IMAGE_ROOT)?.trim()
+  const clientVersion = env.VITE_CLIENT_VERSION?.trim() || '0.1.0'
+  const clientBuild = env.VITE_CLIENT_BUILD?.trim()
+    || process.env.GITHUB_SHA?.trim()
+    || new Date().toISOString().replace(/[-:.TZ]/g, '')
 
   return {
     plugins: [
@@ -93,6 +97,10 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url)),
       },
+    },
+    define: {
+      __APP_VERSION__: JSON.stringify(clientVersion),
+      __APP_BUILD__: JSON.stringify(clientBuild),
     },
     build: {
       chunkSizeWarningLimit: 800,

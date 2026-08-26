@@ -6,6 +6,24 @@ import type { ImageParameterApiOption, ImageParameterOption, ImageParameters, Im
 
 type ImageOptionCategory = 'resolutions' | 'qualities' | 'aspectRatios'
 
+const preferredResolutionOrder = new Map([
+  ['1k', 0],
+  ['2k', 1],
+  ['4k', 2],
+])
+
+export function sortImageResolutionCodes(codes: string[]) {
+  return [...new Set(codes)]
+    .map((value, index) => ({ value, index, order: preferredResolutionOrder.get(value.trim().toLowerCase()) }))
+    .sort((left, right) => {
+      if (left.order === undefined && right.order === undefined) return left.index - right.index
+      if (left.order === undefined) return 1
+      if (right.order === undefined) return -1
+      return left.order - right.order || left.index - right.index
+    })
+    .map((item) => item.value)
+}
+
 const localizedLabels: Record<ImageOptionCategory, Record<string, Record<Locale, string>>> = {
   resolutions: {
     '1k': { 'zh-CN': '1K(快速预览)', 'en-US': '1K(Quick Preview)' },
@@ -62,14 +80,22 @@ export function getLocalizedImageOptionLabel(category: ImageOptionCategory, opti
 
 export const fallbackImageParameters: ImageParameters = {
   models: [],
-  resolutions: ['1k', '4k'].map((value) => ({ label: value.toUpperCase(), value })),
+  resolutions: ['1k', '2k', '4k'].map((value) => ({ label: value.toUpperCase(), value })),
   qualities: ['low', 'med', 'high'].map((value) => ({ label: value, value })),
-  aspectRatios: ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9'].map((value) => ({ label: value, value })),
+  aspectRatios: ['auto', '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9'].map((value) => ({ label: value, value })),
   pointPrices: [],
 }
 
+function normalizeResolutionOptions(options: ImageParameterApiOption[] | undefined): ImageParameterOption[] {
+  const normalized = normalizeOptions(options)
+  const lookup = new Map(normalized.map((item) => [item.value, item]))
+  return sortImageResolutionCodes(normalized.map((item) => item.value))
+    .map((value) => lookup.get(value))
+    .filter((item): item is ImageParameterOption => Boolean(item))
+}
+
 function normalizeImageParameters(parameters: ImageParametersResponse): ImageParameters {
-  const resolutions = normalizeOptions(parameters.resolutions)
+  const resolutions = normalizeResolutionOptions(parameters.resolutions)
   const qualities = normalizeOptions(parameters.qualities)
   const aspectRatios = normalizeOptions(parameters.aspectRatios)
 
@@ -87,9 +113,11 @@ function normalizeImageParameters(parameters: ImageParametersResponse): ImagePar
 export const useImageOptionsStore = defineStore('imageOptions', () => {
   const options = ref<ImageParameters>(fallbackImageParameters)
   const loading = ref(false)
+  const modelCapabilitiesReady = ref(false)
 
   async function fetchOptions() {
     loading.value = true
+    modelCapabilitiesReady.value = false
     try {
       const [parametersResult, modelsResult] = await Promise.allSettled([getImageParameters(), getImageModels()])
       const normalizedParameters = parametersResult.status === 'fulfilled'
@@ -103,10 +131,11 @@ export const useImageOptionsStore = defineStore('imageOptions', () => {
         models: modelOptions,
       }
       if (modelsResult.status === 'rejected') throw modelsResult.reason
+      modelCapabilitiesReady.value = modelOptions.length > 0
     } finally {
       loading.value = false
     }
   }
 
-  return { options, loading, fetchOptions }
+  return { options, loading, modelCapabilitiesReady, fetchOptions }
 })
