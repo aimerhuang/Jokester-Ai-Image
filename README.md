@@ -89,6 +89,17 @@ npx playwright install chromium
 
 第三方 AI 数据处理告知已加入当前未提交工作区并进入本地生产构建，但公网静态页面及后端文档版本配置仍需在部署时验证。该告知不参与注册；用户首次生图缺少当前 Provider 授权时，后端返回 `AI_CONSENT_REQUIRED`，前端展示告知并在用户确认后记录授权、自动重试原任务。告知缺失时仍由服务端 fail-closed，前端不得绕过。
 
+## TeamCity 生产部署
+
+生产站点由 `https://johhai.com` 的 Caddy 容器提供静态文件，并把 `/api`、头像、博客媒体和提示词图片转发到后端。TeamCity 使用以下脚本完成独立前端发布：
+
+```powershell
+.\deploy\teamcity-build.ps1
+.\deploy\teamcity-deploy.ps1
+```
+
+构建脚本执行 `npm ci` 和 `npm run build`，把 `dist/` 打包为带构建号和 Git commit 的版本。部署脚本通过项目 SSH Key 上传版本包，服务器切换前端目录并重建 Caddy；首页健康检查失败时恢复上一版本。该流程不重启 API、MySQL 或 Redis。
+
 ## 文档
 
 - [API 集成指南](integration-guide.md)
