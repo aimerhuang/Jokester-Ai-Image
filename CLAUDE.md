@@ -44,6 +44,8 @@ VITE_DEFAULT_THEME=light
 
 除独立全屏的 `/recharge` 外，受保护路由由 [src/layouts/AppLayout.vue](src/layouts/AppLayout.vue) 包裹；未登录会跳转 `/login`。`/admin/redeem-codes` 还要求当前用户 `isSuperAdmin=true`。
 
+- `/canvas`（无限画布列表）
+- `/canvas/:canvasId`（无限画布编辑器，独立全屏，需登录）
 - `/login`
 - `/register`
 - `/playground`
@@ -75,6 +77,17 @@ VITE_DEFAULT_THEME=light
 - 生成后如果返回 `taskIds`、`ids`、`taskId` 或 `id` 且未成功，前端会并行轮询各个 `GET /api/ai/images/{id}`；待轮询 ID 列表保存在 `localStorage.pendingAiImageTaskId`，并兼容旧的单 ID 数据。首页为每张图片保留独立槽位，单张完成后立即展示，其余槽位继续加载。响应未提供 `expiresAt` 时按每张 5 分钟、最长 10 分钟兜底。创建前会短超时读取最近 100 个任务作为 ID 基线；创建结果未知且拿不到任务 ID 时，前端按用户把可见任务字段指纹、基线 ID 和恢复期限写入 `sessionStorage.pendingAiImageHistoryRecovery`，跳转任务历史并在首次为空或请求失败时继续轮询。只有基线外且提示词、模型、数量、分辨率、质量、比例、来源提示词 ID 和参考图数量均匹配的新终态任务才结束恢复；基线读取失败时不猜测旧任务，持续轮询至最长 10 分钟期限。
 - 创建请求必须携带 `idempotencyKey`；相同参数在 30 分钟内复用 `localStorage.pendingAiImageSubmission` 中的 key，创建请求结果已知或发生 `IDEMPOTENCY_CONFLICT` 后清除。创作表单按当前用户写入 `sessionStorage.playgroundDraft`，用于站内导航和充值返回恢复。
 - 图片预览兼容 `url`、`dataUrl`、`resultUrls`、`assets[].url`、`base64` 等响应字段。`/api/media/ai/` 和 `/api/assets/` 私有图片由 `useAuthenticatedImageUrls` 携带 token 拉取为 blob URL，避免裸 `<img>` 请求丢失鉴权头。
+
+## 无限画布
+
+- 接口位于 [src/services/canvases.ts](src/services/canvases.ts)：`/api/ai/canvases` 列表/创建/详情/保存/重命名/删除，`POST /api/assets/from-ai-result` 把生图结果登记为 Asset。画布文档只用 `assetId` 引用图片，不得写入 URL、base64 或扩展字段（后端白名单校验）。
+- 编辑器 [src/views/CanvasEditorView.vue](src/views/CanvasEditorView.vue)；节点、生成面板、画廊抽屉在 [src/components/canvas/](src/components/canvas/)。
+- 保存由 `useCanvasPersistence` 负责：停止编辑 1.5 秒自动保存，携带 `baseRevision`；`CANVAS_REVISION_CONFLICT` 时让用户选择加载最新或覆盖；未同步修改写入 `localStorage` 草稿（`jokester:canvas-draft:{userId}:{canvasId}`）。
+- 生成复用 `POST /api/ai/images`，参数与定价规则与创作页一致（`useCanvasGenerationOptions`，定价解析在 [src/utils/imagePricing.ts](src/utils/imagePricing.ts)）。发送前先把 `pendingIdempotencyKey` 写入节点并保存，结果未知时保留 key，重试不会重复扣分；成功后自动登记首个结果为节点输出 `primaryResult.assetId`，供下游节点作为参考图。
+- 连线：用户只能拖出到生图节点（`canConnect`）；切图/裁剪/标记产出的图片节点由 `addDerivedConnection` 自动连回来源节点（每个图片节点最多 1 条输入，后端同样校验）。选中节点时其出边播放由源到目标的流动动画（`.connection-flow`）。
+- 画布强调色为橄榄绿 `--canvas-accent`（定义在 [src/styles/tokens.css](src/styles/tokens.css)，深色主题单独取值），不要再写死紫色。左下角指南针按钮开关小地图，状态存 `localStorage.canvasMinimapOpen`。
+- 交互：左键在空白处拖动是框选（`Shift` 追加），中键或 `Space`+左键拖动平移。多选后浮层按钮“绑组”/“解组”（`Ctrl+G` / `Ctrl+Shift+G`）；组由节点 `groupId` 表示，`getGroups`/`groupNodes`/`ungroupNodes` 在 `canvasDocument.ts`，成员少于 2 个自动解散。点击组内节点先选中整组，未拖动时再次点击选中该节点；切图结果默认成组。
+- E2E：`canvas.e2e.spec.ts`。
 
 ## 用户、积分与资料
 

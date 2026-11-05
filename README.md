@@ -44,7 +44,24 @@ pm2 stop jokester-ai-image
 pm2 delete jokester-ai-image
 ```
 
-这不是生产部署配置，Vite 端口也没有固定。生产环境应执行 `npm run build`，用静态服务器托管 `dist/`，并另外配置 SPA history fallback 和 API 反向代理。
+这不是生产部署配置，Vite 端口也没有固定。
+
+## Docker 镜像
+
+生产和本地联调都使用本仓库的 `Dockerfile`：Node 阶段执行 `npm ci && npm run build`，运行阶段由 nginx
+托管 `dist/`，负责 SPA history fallback，并把 `/api`、`/avatar`、`/blog`、`/prompt-images`、`/swagger`
+反向代理到 `api:8080`。nginx 配置在 `docker/nginx/`，运行期通过环境变量切换：
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `API_UPSTREAM` | `api:8080` | 后端地址 |
+| `APP_DOMAIN` | `localhost` | 主域名；`www.` 前缀会 301 到主域名 |
+| `TLS_MODE` | `off` | `on` 时监听 443，证书挂载到 `/etc/nginx/certs/tls.crt`、`tls.key` |
+| `REAL_IP_MODE` | `none` | `cloudflare` 时只信任 Cloudflare 网段传来的 `CF-Connecting-IP` |
+
+`VITE_*` 只在构建期生效，通过 `--build-arg` 传入。整套编排（前端 + 后端 + MySQL + Redis）在后端仓库
+`Jokester.Admin/docker/`，本地运行见该目录的 `README.md`；TeamCity 发布使用 `deploy/teamcity-build.ps1`
+构建镜像、`deploy/teamcity-deploy.ps1` 上传并调用服务器上的 `jokester.sh deploy-web`。
 
 ## 常用命令
 

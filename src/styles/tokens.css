@@ -15,6 +15,7 @@
   --color-vip-text: #5c3500;
   --color-vip-accent: #8e5200;
   --color-vip-highlight: rgba(255, 255, 255, 0.82);
+  --canvas-accent: #556b2f;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 18px;
@@ -54,6 +55,7 @@ html.dark {
   --color-vip-text: #fff1bd;
   --color-vip-accent: #ffe08a;
   --color-vip-highlight: rgba(255, 241, 189, 0.58);
+  --canvas-accent: #8fa05a;
   --shadow-card: 0 12px 34px rgba(0, 0, 0, 0.24);
   --shadow-card-hover: 0 16px 42px rgba(0, 0, 0, 0.3);
   --shadow-primary: 0 8px 20px rgba(168, 185, 120, 0.18);

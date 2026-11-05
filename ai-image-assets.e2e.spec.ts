@@ -599,7 +599,7 @@ test('loads two generated tasks independently and shows both distinct results', 
   const state = await mockBackend(page, 'none', { multiImageTasks: true })
   await openPlayground(page)
   await expect(page.locator('.app-logo strong')).toHaveText('Jo AI Image')
-  await expect(page.locator('.app-logo__mark')).toHaveAttribute('src', '/logo-black-512.png')
+  await expect(page.locator('.app-logo__mark')).toHaveAttribute('src', '/logo.png')
 
   const batchSelect = page.locator('.inline-parameter-row .el-select').last()
   await batchSelect.click()

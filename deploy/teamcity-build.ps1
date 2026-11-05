@@ -16,7 +16,7 @@ function Invoke-NativeCommand {
     }
 }
 
-function ConvertTo-ReleasePart {
+function ConvertTo-DockerTagPart {
     param([Parameter(Mandatory = $true)][string]$Value)
 
     $normalized = $Value.ToLowerInvariant() -replace '[^a-z0-9_.-]', '-'
@@ -38,6 +38,14 @@ if ([string]::IsNullOrWhiteSpace($buildNumber)) {
     $buildNumber = 'local'
 }
 
+$targetPlatform = $env:DOCKER_PLATFORM
+if ([string]::IsNullOrWhiteSpace($targetPlatform)) {
+    $targetPlatform = 'linux/amd64'
+}
+if ($targetPlatform -notmatch '^linux/(amd64|arm64)$') {
+    throw 'DOCKER_PLATFORM must be linux/amd64 or linux/arm64.'
+}
+
 $commit = $env:BUILD_VCS_NUMBER
 if ([string]::IsNullOrWhiteSpace($commit)) {
     Push-Location $checkoutDirectory
@@ -53,27 +61,44 @@ if ([string]::IsNullOrWhiteSpace($commit)) {
 }
 
 $shortCommit = $commit.Substring(0, [Math]::Min(12, $commit.Length))
-$release = ConvertTo-ReleasePart "$buildNumber-$shortCommit"
-$archiveName = "jokester-frontend-$release.tar.gz"
+$tag = ConvertTo-DockerTagPart "$buildNumber-$shortCommit"
+$imageReference = "jokester-web:$tag"
 $artifactDirectory = Join-Path $checkoutDirectory 'artifacts'
+$archiveName = "jokester-web-$tag.tar"
 $archivePath = Join-Path $artifactDirectory $archiveName
-$distDirectory = Join-Path $checkoutDirectory 'dist'
 
 New-Item -ItemType Directory -Path $artifactDirectory -Force | Out-Null
 
+$buildArguments = @(
+    'build',
+    '--pull',
+    '--platform', $targetPlatform,
+    '--provenance=false',
+    '--file', 'Dockerfile',
+    '--tag', $imageReference,
+    '--label', "org.opencontainers.image.revision=$commit",
+    '--label', "org.opencontainers.image.version=$buildNumber",
+    '--build-arg', 'VITE_API_BASE_URL=/api',
+    '--build-arg', "VITE_CLIENT_BUILD=$commit"
+)
+# Optional mirrors for restricted networks: env.NODE_IMAGE, env.NGINX_IMAGE, env.NPM_REGISTRY.
+foreach ($name in @('NODE_IMAGE', 'NGINX_IMAGE', 'NPM_REGISTRY', 'VITE_CLIENT_VERSION')) {
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if (-not [string]::IsNullOrWhiteSpace($value)) {
+        $buildArguments += @('--build-arg', "$name=$($value.Trim())")
+    }
+}
+$buildArguments += '.'
+
 Push-Location $checkoutDirectory
 try {
-    $env:VITE_API_BASE_URL = '/api'
-    $env:VITE_CLIENT_BUILD = $commit
-    Invoke-NativeCommand npm @('ci')
-    Invoke-NativeCommand npm @('run', 'build')
-
-    $indexPath = Join-Path $distDirectory 'index.html'
-    if (-not (Test-Path -LiteralPath $indexPath -PathType Leaf)) {
-        throw 'Frontend build did not produce dist/index.html.'
-    }
-
-    Invoke-NativeCommand tar @('-czf', $archivePath, '-C', $distDirectory, '.')
+    Invoke-NativeCommand docker $buildArguments
+    Invoke-NativeCommand docker @(
+        'image', 'inspect',
+        '--format', 'Image={{.Id}} Size={{.Size}} OS={{.Os}} Arch={{.Architecture}}',
+        $imageReference
+    )
+    Invoke-NativeCommand docker @('save', '--output', $archivePath, $imageReference)
 }
 finally {
     Pop-Location
@@ -81,15 +106,14 @@ finally {
 
 $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText(
-    (Join-Path $artifactDirectory 'frontend-release.txt'),
-    "$release`n",
+    (Join-Path $artifactDirectory 'web-image-reference.txt'),
+    "$imageReference`n",
     $utf8WithoutBom)
 [System.IO.File]::WriteAllText(
-    (Join-Path $artifactDirectory 'frontend-archive.txt'),
+    (Join-Path $artifactDirectory 'web-image-archive.txt'),
     "$archiveName`n",
     $utf8WithoutBom)
 
-$archive = Get-Item -LiteralPath $archivePath
-Write-Host "Built frontend release $release"
-Write-Host "Archive: $archivePath ($($archive.Length) bytes)"
-Write-Host "##teamcity[setParameter name='env.JOKESTER_FRONTEND_RELEASE' value='$release']"
+Write-Host "Built $imageReference"
+Write-Host "Archive: $archivePath"
+Write-Host "##teamcity[setParameter name='env.JOKESTER_WEB_IMAGE_REFERENCE' value='$imageReference']"

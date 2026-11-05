@@ -17,6 +17,12 @@ const router = createRouter({
       ],
     },
     {
+      path: '/canvas/:canvasId',
+      name: 'canvas-editor',
+      component: () => import('@/views/CanvasEditorView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/recharge',
       name: 'recharge',
       component: () => import('@/views/RechargeView.vue'),
@@ -27,9 +33,10 @@ const router = createRouter({
       component: AppLayout,
       meta: { requiresAuth: true },
       children: [
+        { path: 'canvas', name: 'canvas', component: () => import('@/views/CanvasListView.vue'), meta: { titleKey: 'canvas.title' } },
         { path: 'playground', name: 'playground', component: () => import('@/views/PlaygroundView.vue'), meta: { titleKey: 'playground.title', subtitleKey: 'playground.subtitle' } },
         { path: 'images', name: 'images', component: () => import('@/views/ImagesView.vue'), meta: { titleKey: 'gallery.title', subtitleKey: 'gallery.subtitle' } },
-        { path: 'prompts', name: 'prompts', component: () => import('@/views/PromptLibraryView.vue'), meta: { titleKey: 'promptLibrary.title' } },
+        { path: 'prompts', redirect: '/playground' },
         { path: 'images/:id/edit', name: 'image-edit', component: () => import('@/views/ImageEditView.vue'), meta: { titleKey: 'imageDetail.title', subtitleKey: 'imageDetail.subtitle' } },
         { path: 'credits', name: 'credits', component: () => import('@/views/CreditsView.vue'), meta: { titleKey: 'credits.title', subtitleKey: 'credits.subtitle' } },
         { path: 'pricing', name: 'pricing', component: () => import('@/views/PricingView.vue'), meta: { titleKey: 'pricing.title', subtitleKey: 'pricing.subtitle' } },

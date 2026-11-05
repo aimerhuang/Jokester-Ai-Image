@@ -47,8 +47,6 @@ a:hover { color: #9b342b; }
   height: 32px;
   display: block;
   flex: 0 0 32px;
-  border-radius: 50%;
-  background: #ffffff;
   object-fit: contain;
 }
 

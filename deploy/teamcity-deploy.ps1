@@ -54,34 +54,32 @@ if (-not [int]::TryParse($deployPortText, [ref]$deployPort) -or $deployPort -lt 
 }
 
 $artifactDirectory = Join-Path $checkoutDirectory 'artifacts'
-$releaseFile = Join-Path $artifactDirectory 'frontend-release.txt'
-$archiveFile = Join-Path $artifactDirectory 'frontend-archive.txt'
-if (-not (Test-Path -LiteralPath $releaseFile -PathType Leaf)) {
-    throw 'frontend-release.txt is missing. Run teamcity-build.ps1 first.'
+$imageReferenceFile = Join-Path $artifactDirectory 'web-image-reference.txt'
+$imageArchiveFile = Join-Path $artifactDirectory 'web-image-archive.txt'
+if (-not (Test-Path -LiteralPath $imageReferenceFile -PathType Leaf)) {
+    throw 'web-image-reference.txt is missing. Run teamcity-build.ps1 first.'
 }
-if (-not (Test-Path -LiteralPath $archiveFile -PathType Leaf)) {
-    throw 'frontend-archive.txt is missing. Run teamcity-build.ps1 first.'
+if (-not (Test-Path -LiteralPath $imageArchiveFile -PathType Leaf)) {
+    throw 'web-image-archive.txt is missing. Run teamcity-build.ps1 first.'
 }
 
-$release = (Get-Content -LiteralPath $releaseFile -Raw).Trim()
-$archiveName = (Get-Content -LiteralPath $archiveFile -Raw).Trim()
-if ($release -notmatch '^[a-z0-9._-]+$') {
-    throw 'The generated frontend release is invalid.'
+$imageReference = (Get-Content -LiteralPath $imageReferenceFile -Raw).Trim()
+$archiveName = (Get-Content -LiteralPath $imageArchiveFile -Raw).Trim()
+if ($imageReference -notmatch '^[a-z0-9._/-]+:[a-z0-9._-]+$') {
+    throw 'The generated web image reference is invalid.'
 }
-if ($archiveName -notmatch '^[a-zA-Z0-9._-]+\.tar\.gz$') {
-    throw 'The generated frontend archive name is invalid.'
+if ($archiveName -notmatch '^[a-zA-Z0-9._-]+\.tar$') {
+    throw 'The generated web image archive name is invalid.'
 }
 
 $archivePath = Join-Path $artifactDirectory $archiveName
-$serverDeployPath = Join-Path $PSScriptRoot 'server-deploy-frontend.sh'
-foreach ($path in @($archivePath, $serverDeployPath)) {
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Required deployment file is missing: $path"
-    }
+if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+    throw "Required deployment file is missing: $archivePath"
 }
+$release = ($imageReference -split ':', 2)[1]
 
 $remote = "$deployUser@$deployHost"
-$remoteDirectory = "$deployRoot/frontend-incoming/$release"
+$remoteDirectory = "$deployRoot/releases/web-$release"
 $knownHostsPath = Join-Path $artifactDirectory 'frontend-deploy-known-hosts'
 $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($knownHostsPath, "$deployHostKey`n", $utf8WithoutBom)
@@ -101,9 +99,11 @@ $sshArguments = $sshOptions + @('-p', $deployPortText)
 $scpArguments = $sshOptions + @('-P', $deployPortText)
 
 Invoke-NativeCommand ssh ($sshArguments + @($remote, "mkdir -p -- '$remoteDirectory'"))
-Invoke-NativeCommand scp ($scpArguments + @($archivePath, $serverDeployPath, "${remote}:$remoteDirectory/"))
+Invoke-NativeCommand scp ($scpArguments + @($archivePath, "${remote}:$remoteDirectory/"))
 
-$remoteCommand = "bash '$remoteDirectory/server-deploy-frontend.sh' '$deployRoot' '$remoteDirectory/$archiveName' '$release'"
+# jokester.sh is installed by the backend (Jokester.Admin) deployment; deploy the API first.
+$remoteCommand = "test -f '$deployRoot/jokester.sh' || { echo 'jokester.sh is missing in $deployRoot; deploy Jokester.Admin first.' >&2; exit 2; }; " +
+    "bash '$deployRoot/jokester.sh' deploy-web '$remoteDirectory/$archiveName' '$imageReference'"
 Invoke-NativeCommand ssh ($sshArguments + @($remote, $remoteCommand))
 
 Write-Host "Frontend deployment completed on $remote"

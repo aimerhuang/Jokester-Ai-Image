@@ -31,7 +31,7 @@ test('publishes the legal pages', async ({ page }) => {
   await expect(page.getByText(`版本：${privacyVersion}`)).toBeVisible()
   await expect(page.getByText('生效日期：2026 年 8 月 21 日')).toBeVisible()
   await expect(page.getByText('内部草案')).toHaveCount(0)
-  await expect(page.locator('.brand__mark')).toHaveAttribute('src', '/logo-black-512.png')
+  await expect(page.locator('.brand__mark')).toHaveAttribute('src', '/logo.png')
 
   await page.goto(`${baseUrl}/legal/terms/index.html`)
   await expect(page.getByRole('heading', { name: 'Jo AI Image 服务条款' })).toBeVisible()
@@ -40,7 +40,7 @@ test('publishes the legal pages', async ({ page }) => {
 
   await page.goto(`${baseUrl}/login`)
   await expect(page.locator('.app-logo strong')).toHaveText('Jo AI Image')
-  await expect(page.locator('.app-logo__mark')).toHaveAttribute('src', '/logo-black-512.png')
+  await expect(page.locator('.app-logo__mark')).toHaveAttribute('src', '/logo.png')
   await expect(page.locator('.auth-form h1')).toHaveText('Jo AI Image')
 })
 

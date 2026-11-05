@@ -144,8 +144,8 @@ const pageTitle = computed(() => app.t(String(route.meta.titleKey || 'app.name')
 const pageSubtitle = computed(() => route.meta.subtitleKey ? app.t(String(route.meta.subtitleKey)) : '')
 
 const navItems = [
+  { to: '/canvas', label: 'nav.canvas' },
   { to: '/playground', label: 'nav.playground' },
-  { to: '/prompts', label: 'nav.promptLibrary' },
   { to: '/images', label: 'nav.gallery' },
   { to: '/credits', label: 'nav.credits' },
   { to: '/pricing', label: 'nav.pricing' },
