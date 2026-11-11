@@ -60,8 +60,8 @@ pm2 delete jokester-ai-image
 | `REAL_IP_MODE` | `none` | `cloudflare` 时只信任 Cloudflare 网段传来的 `CF-Connecting-IP` |
 
 `VITE_*` 只在构建期生效，通过 `--build-arg` 传入。整套编排（前端 + 后端 + MySQL + Redis）在后端仓库
-`Jokester.Admin/docker/`，本地运行见该目录的 `README.md`；TeamCity 发布使用 `deploy/teamcity-build.ps1`
-构建镜像、`deploy/teamcity-deploy.ps1` 上传并调用服务器上的 `jokester.sh deploy-web`。
+`Jokester.Admin/docker/`，本地运行见该目录的 `README.md`；生产更新是在本机 `docker build` 并 `docker save`，`scp` 上传后在服务器执行
+`jokester.sh deploy-web`，完整命令见后端仓库 `docs/docker-deploy.md`。
 
 ## 常用命令
 
