@@ -247,7 +247,7 @@ test('image toolbar crops into a new asset node and prefills an upscale node', a
 
   await page.locator('[data-node-id="img_1"]').click()
   await page.getByTestId('canvas-image-tool-upscale').click()
-  await expect(page.getByPlaceholder('描述你想要生成的画面内容，@引用素材')).toHaveValue(/^高清放大图片1/)
+  await expect(page.getByTestId('canvas-prompt-input')).toHaveText(/^高清放大图片1/)
   await expect(page.locator('[data-node-id]')).toHaveCount(4)
   // img_1 now feeds gen_1, the cropped result (derived link) and the upscale node.
   await expect.poll(() => state.saves.some((save) => (save.document.connections as Array<{ from: string }>)
@@ -342,4 +342,75 @@ test('minimap toggles from the corner controls and pans the viewport', async ({ 
 
   await page.getByTestId('canvas-minimap-toggle').click()
   await expect(minimap).toHaveCount(0)
+})
+
+type SavedNode = { id: string; type: string; data: Record<string, unknown> }
+const savedNodes = (state: CanvasMockState) => (state.saves.at(-1)?.document.nodes as SavedNode[] | undefined) || []
+
+test('new generate nodes reuse the last chosen model and size parameters', async ({ page }) => {
+  const state = await mockBackend(page, { document: connectedDocument() })
+  await page.goto(`/canvas/${canvasId}`)
+
+  await page.locator('[data-node-id="gen_1"]').click()
+  await page.locator('.settings-trigger').click()
+  await page.locator('.image-settings').getByRole('button', { name: '1K', exact: true }).click()
+  await page.locator('.image-settings').getByRole('button', { name: '1:1', exact: true }).click()
+  await page.keyboard.press('Escape')
+
+  await page.getByTestId('canvas-add-generate').click()
+  await expect.poll(() => savedNodes(state).filter((node) => node.type === 'generate').length).toBe(2)
+  const created = savedNodes(state).find((node) => node.type === 'generate' && node.id !== 'gen_1')!
+  expect(created.data).toMatchObject({ modelCode: 'gpt-image-2', resolutionCode: '1k', aspectRatioCode: '1:1', qualityCode: 'low', imageCount: 1 })
+
+  // The choice survives a reload because it is remembered per user rather than per canvas.
+  await page.reload()
+  await page.getByTestId('canvas-add-generate').click()
+  await expect.poll(() => savedNodes(state).filter((node) => node.type === 'generate').length).toBe(3)
+  const latest = savedNodes(state).filter((node) => node.type === 'generate').at(-1)!
+  expect(latest.data).toMatchObject({ resolutionCode: '1k', aspectRatioCode: '1:1' })
+})
+
+test('pasting an image while typing a prompt uploads it as a reference of that node', async ({ page }) => {
+  const state = await mockBackend(page, { document: connectedDocument() })
+  await page.goto(`/canvas/${canvasId}`)
+
+  await page.locator('[data-node-id="gen_1"]').click()
+  const prompt = page.getByTestId('canvas-prompt-input')
+  await prompt.click()
+  await prompt.evaluate((element, base64) => {
+    const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
+    const data = new DataTransfer()
+    data.items.add(new File([bytes], 'image.png', { type: 'image/png' }))
+    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+  }, imagePng.toString('base64'))
+
+  await expect.poll(() => state.uploads).toBe(1)
+  await expect(page.locator('[data-node-id]')).toHaveCount(3)
+  await expect.poll(() => (state.saves.at(-1)?.document.connections as Array<{ to: string }> | undefined)
+    ?.filter((edge) => edge.to === 'gen_1').length).toBe(2)
+  await expect(prompt).toHaveText('')
+})
+
+test('@ references render as tags and one backspace removes the whole tag', async ({ page }) => {
+  const state = await mockBackend(page, { document: connectedDocument() })
+  await page.goto(`/canvas/${canvasId}`)
+
+  await page.locator('[data-node-id="gen_1"]').click()
+  const prompt = page.getByTestId('canvas-prompt-input')
+  await prompt.click()
+  await page.keyboard.type('参考@')
+  await expect(page.getByRole('option', { name: /图片1/ })).toBeVisible()
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('的配色')
+
+  const chip = prompt.locator('.prompt-chip')
+  await expect(chip).toHaveCount(1)
+  await expect(chip).toHaveText('图片1')
+  await expect.poll(() => savedNodes(state).find((node) => node.id === 'gen_1')?.data.prompt).toBe('参考图片1的配色')
+
+  for (let index = 0; index < 3; index += 1) await page.keyboard.press('Backspace')
+  await expect(prompt.locator('.prompt-chip')).toHaveCount(1)
+  await page.keyboard.press('Backspace')
+  await expect(prompt.locator('.prompt-chip')).toHaveCount(0)
+  await expect.poll(() => savedNodes(state).find((node) => node.id === 'gen_1')?.data.prompt).toBe('参考')
 })

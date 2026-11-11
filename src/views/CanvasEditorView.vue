@@ -35,6 +35,8 @@
       class="editor-stage"
       :class="{ 'is-panning': interaction?.kind === 'pan' || spacePressed }"
       @pointerdown="handleStagePointerDown"
+      @pointermove="trackStagePointer"
+      @pointerleave="forgetStagePointer"
       @mousedown.middle.prevent
       @wheel.prevent="handleWheel"
       @dragover.prevent
@@ -97,6 +99,7 @@
           :balance="credits.summaryLoaded ? credits.summary.balance : null"
           :options-ready="optionsReady"
           @update="patchGenerateNode(activeGenerateNode, $event)"
+          @remember="rememberGenerateParams(activeGenerateNode)"
           @generate="generation.submit(activeGenerateNode.id, $event)"
           @reference="openUpload(true)"
           @recharge="openRecharge"
@@ -284,6 +287,7 @@ import {
   createCanvasId, createGenerateNode, createImageNode, emptyCanvasDocument, findNode, getGenerateInputs, getGroups,
   getInputAssetId, groupNodes, removeConnection, removeNodes, ungroupNodes,
 } from '@/utils/canvasDocument'
+import { loadGenerateParams, resolveGenerateDefaults, saveGenerateParams } from '@/utils/canvasGenerateDefaults'
 import type { ApiError } from '@/types/api'
 import type {
   CanvasDocument, CanvasGalleryEntry, CanvasGenerateNode, CanvasGenerateNodeData, CanvasNode, CanvasPanelInput, CanvasTextNode,
@@ -949,7 +953,7 @@ function finishConnect(fromId: string, event: PointerEvent) {
   if (targetId) return
   // Dropping a connection on empty canvas creates a new generate node wired to the source.
   const world = toWorld(event.clientX, event.clientY)
-  const node = createGenerateNode(Math.round(world.x), Math.round(world.y - GENERATE_NODE_HEIGHT / 2), defaultGenerateData())
+  const node = createGenerateNode(Math.round(world.x), Math.round(world.y - GENERATE_NODE_HEIGHT / 2), defaultGenerateData(findNode(doc.value, fromId)))
   doc.value.nodes.push(node)
   addConnection(doc.value, fromId, node.id)
   selectOnly(node.id)
@@ -1021,9 +1025,17 @@ function revealNode(nodeId: string) {
   else focusNode(nodeId)
 }
 
-function defaultGenerateData(): Partial<CanvasGenerateNodeData> {
-  const model = optionsStore.options.models[0]
-  return model ? { modelCode: model.value, catalogVersion: model.catalogVersion || null } : {}
+// New generate nodes inherit the source generate node's parameters, else the user's last explicit choice.
+function defaultGenerateData(source?: CanvasNode | null): Partial<CanvasGenerateNodeData> {
+  return resolveGenerateDefaults(
+    optionsStore.options.models,
+    loadGenerateParams(auth.user?.id),
+    source?.type === 'generate' ? source.data : null,
+  )
+}
+
+function rememberGenerateParams(node: CanvasGenerateNode) {
+  saveGenerateParams(auth.user?.id, node.data)
 }
 
 function addGenerateNode() {
@@ -1104,43 +1116,57 @@ async function handleFiles(event: Event) {
   const input = event.target as HTMLInputElement
   const files = [...(input.files || [])]
   input.value = ''
-  await uploadFiles(files, null)
+  const connectTo = uploadConnectsToActive ? activeGenerateNode.value : null
+  uploadConnectsToActive = false
+  await uploadFiles(files, { connectTo })
 }
 
-async function uploadFiles(files: File[], position: { x: number; y: number } | null) {
-  const target = uploadConnectsToActive ? activeGenerateNode.value : null
-  uploadConnectsToActive = false
+interface UploadPlacement {
+  // World position of the first node's top-left corner; defaults to the viewport center.
+  position?: { x: number; y: number } | null
+  // Wires every uploaded image into this generate node as a reference input.
+  connectTo?: CanvasGenerateNode | null
+}
+
+async function uploadFiles(files: File[], { position = null, connectTo = null }: UploadPlacement = {}) {
+  const target = connectTo
   let slots = target ? MAX_GENERATE_INPUTS - doc.value.connections.filter((edge) => edge.to === target.id).length : Infinity
-  let offset = 0
-  for (const file of files) {
-    if (!UPLOAD_TYPES.has(file.type) || file.size > MAX_UPLOAD_BYTES) {
-      ElMessage.warning(app.t('canvas.uploadInvalid'))
-      continue
-    }
-    if (target && slots <= 0) {
-      ElMessage.warning(app.t('canvas.inputLimit'))
-      break
-    }
-    try {
-      const asset = await uploadReferenceImage(file)
-      const anchor = position
-        || (target ? { x: target.x - NODE_WIDTH - 120, y: target.y + offset } : viewportCenter())
-      const node = createImageNode(asset.assetId, Math.round(anchor.x + (position || target ? 0 : offset)), Math.round(anchor.y + (target ? 0 : offset)), {
-        title: file.name,
-        width: asset.width,
-        height: asset.height,
-      })
-      doc.value.nodes.push(node)
-      if (target) {
-        addConnection(doc.value, node.id, target.id)
-        slots -= 1
-      }
-      offset += target ? node.height + 40 : 32
-    } catch (error) {
-      ElMessage.error((error as ApiError)?.message || app.t('canvas.uploadFailed'))
-    }
+  const accepted = files.filter((file) => UPLOAD_TYPES.has(file.type) && file.size <= MAX_UPLOAD_BYTES)
+  if (accepted.length < files.length) ElMessage.warning(app.t('canvas.uploadInvalid'))
+  if (target && slots <= 0 && accepted.length) {
+    ElMessage.warning(app.t('canvas.inputLimit'))
+    return
   }
-  if (target) selectOnly(target.id)
+  if (!accepted.length) return
+  const progress = ElMessage({ type: 'info', duration: 0, message: app.t('canvas.uploadingImages').replace('{count}', String(accepted.length)) })
+  let offset = 0
+  try {
+    for (const file of accepted) {
+      if (target && slots <= 0) {
+        ElMessage.warning(app.t('canvas.inputLimit'))
+        break
+      }
+      try {
+        const asset = await uploadReferenceImage(file)
+        const anchor = position
+          || (target ? { x: target.x - NODE_WIDTH - 120, y: target.y + offset } : viewportCenter())
+        const node = createImageNode(asset.assetId, Math.round(anchor.x + (position || target ? 0 : offset)), Math.round(anchor.y + (target ? 0 : offset)), {
+          title: file.name,
+          width: asset.width,
+          height: asset.height,
+        })
+        doc.value.nodes.push(node)
+        // The target may have been deleted while the upload was in flight.
+        if (target && findNode(doc.value, target.id) && addConnection(doc.value, node.id, target.id)) slots -= 1
+        offset += target ? node.height + 40 : 32
+      } catch (error) {
+        ElMessage.error((error as ApiError)?.message || app.t('canvas.uploadFailed'))
+      }
+    }
+  } finally {
+    progress.close()
+  }
+  if (target && findNode(doc.value, target.id)) selectOnly(target.id)
 }
 
 async function insertGalleryEntry(entry: CanvasGalleryEntry, position?: { x: number; y: number }) {
@@ -1173,15 +1199,53 @@ function handleDrop(event: DragEvent) {
     return
   }
   const files = [...(event.dataTransfer?.files || [])]
-  if (files.length) void uploadFiles(files, world)
+  if (files.length) void uploadFiles(files, { position: world })
 }
 
+// Pasting an image anywhere in the editor uploads it. With a generate node selected the image becomes its reference input
+// (including while typing in its prompt); otherwise it lands under the pointer. Text pastes into inputs stay native.
 function handlePaste(event: ClipboardEvent) {
-  if (isEditableTarget(event.target) || toolOverlayOpen()) return
-  const files = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith('image/'))
-  if (!files.length) return
+  if (event.defaultPrevented || consentVisible.value || toolOverlayOpen()) return
+  const data = event.clipboardData
+  if (!data) return
+  const files = clipboardImageFiles(data)
+  const editable = isEditableTarget(event.target)
+  if (editable && data.getData('text/plain').trim()) return
+  if (!files.length) {
+    // Some pages copy an image only as an <img> link; remote URLs cannot be fetched or referenced, so explain instead.
+    if (!editable && /<img/i.test(data.getData('text/html'))) ElMessage.warning(app.t('canvas.pasteImageLinkOnly'))
+    return
+  }
   event.preventDefault()
-  void uploadFiles(files, null)
+  const connectTo = activeGenerateNode.value
+  const position = connectTo ? null : pointerWorldPosition()
+  void uploadFiles(files, {
+    connectTo,
+    position: position ? { x: position.x - NODE_WIDTH / 2, y: position.y - 80 } : null,
+  })
+}
+
+function clipboardImageFiles(data: DataTransfer) {
+  const files = [...data.files].filter((file) => file.type.startsWith('image/'))
+  if (files.length) return files
+  return [...data.items]
+    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file))
+}
+
+let lastPointer: { clientX: number; clientY: number } | null = null
+
+function trackStagePointer(event: PointerEvent) {
+  lastPointer = { clientX: event.clientX, clientY: event.clientY }
+}
+
+function forgetStagePointer() {
+  lastPointer = null
+}
+
+function pointerWorldPosition() {
+  return lastPointer ? toWorld(lastPointer.clientX, lastPointer.clientY) : null
 }
 
 function isEditableTarget(target: EventTarget | null) {
@@ -1339,9 +1403,12 @@ function createDerivedGenerateNode(source: CanvasNode, action: 'cutout' | 'upsca
   const prompt = app.t(`canvas.imageTools.${action}Prompt`).replace('{image}', label)
   const aspectRatioCode = source.type === 'generate' ? source.data.aspectRatioCode || nearestAspect(source.width, source.height) : nearestAspect(source.width, source.height)
   const spot = findFreeSpot(source.x + source.width + 120, source.y, NODE_WIDTH, GENERATE_NODE_HEIGHT)
+  const defaults = defaultGenerateData(source)
   const node = createGenerateNode(spot.x, spot.y, {
-    ...defaultGenerateData(),
+    ...defaults,
     prompt,
+    // The derived aspect ratio only applies in explicit mode; reconcile clears sizeMode again for legacy models.
+    ...(defaults.sizeMode ? { sizeMode: 'explicit' as const } : {}),
     aspectRatioCode,
     ...(action === 'upscale' ? { resolutionCode: '4k' } : {}),
   })

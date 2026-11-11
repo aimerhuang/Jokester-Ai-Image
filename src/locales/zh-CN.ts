@@ -136,6 +136,8 @@ export default {
     registerFailed: '无法引用这张图片',
     uploadFailed: '图片上传失败',
     uploadInvalid: '仅支持 10MB 以内的 PNG、JPG、WEBP 图片',
+    uploadingImages: '正在上传 {count} 张图片…',
+    pasteImageLinkOnly: '剪贴板里只有图片链接，请先把图片保存到本地，再上传或拖入画布',
     clearConfirm: '确定清空画布上的所有节点？可以通过撤销恢复。',
     shortcutPan: '平移画布',
     shortcutZoom: '缩放画布',

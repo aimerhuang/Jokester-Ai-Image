@@ -136,6 +136,8 @@ export default {
     registerFailed: 'Unable to reference this image',
     uploadFailed: 'Image upload failed',
     uploadInvalid: 'Only PNG, JPG or WEBP images up to 10MB are supported',
+    uploadingImages: 'Uploading {count} image(s)…',
+    pasteImageLinkOnly: 'The clipboard only holds an image link. Save the image first, then upload it or drop it onto the canvas.',
     clearConfirm: 'Remove every node from this canvas? You can undo this.',
     shortcutPan: 'Pan canvas',
     shortcutZoom: 'Zoom canvas',

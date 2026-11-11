@@ -20,24 +20,16 @@
       </button>
     </div>
 
-    <div class="prompt-wrap">
-      <textarea
-        ref="promptInput"
-        class="prompt-input"
-        :value="node.data.prompt || ''"
-        :placeholder="app.t('canvas.promptPlaceholder')"
-        maxlength="4000"
-        @input="handlePromptInput"
-        @keydown="handlePromptKeydown"
-        @blur="closeMentionLater"
-      />
-      <div v-if="mentionOpen && inputs.length" class="mention-menu" role="listbox">
-        <button v-for="(input, index) in inputs" :key="input.nodeId" type="button" role="option" @mousedown.prevent="insertMention(index)">
-          <span class="reference-index">{{ index + 1 }}</span>
-          {{ input.label }}
-        </button>
-      </div>
-    </div>
+    <CanvasPromptEditor
+      class="prompt-wrap"
+      :model-value="node.data.prompt || ''"
+      :inputs="inputs"
+      :placeholder="app.t('canvas.promptPlaceholder')"
+      :max-length="4000"
+      :expanded="expanded"
+      @update:model-value="emit('update', { prompt: $event })"
+      @submit="submit"
+    />
 
     <div v-if="notice" class="panel-notice" role="alert">
       <span>{{ notice.text }}</span>
@@ -50,7 +42,7 @@
         :model-value="node.data.modelCode || ''"
         :placeholder="app.t('canvas.noModel')"
         :teleported="false"
-        @update:model-value="emit('update', { modelCode: $event })"
+        @update:model-value="updateParams({ modelCode: $event })"
       >
         <template #prefix><el-icon><MagicStick /></el-icon></template>
         <el-option v-for="model in options.models.value" :key="model.value" :label="model.name || model.label" :value="model.value" />
@@ -72,7 +64,7 @@
                 :key="item.value"
                 type="button"
                 :class="{ active: item.value === node.data.qualityCode }"
-                @click="emit('update', { qualityCode: item.value })"
+                @click="updateParams({ qualityCode: item.value })"
               >{{ shortQuality(item.value) }}</button>
             </div>
           </template>
@@ -84,7 +76,7 @@
               type="button"
               :disabled="options.isAuto.value"
               :class="{ active: !options.isAuto.value && item.value === node.data.resolutionCode }"
-              @click="emit('update', { resolutionCode: item.value })"
+              @click="updateParams({ resolutionCode: item.value })"
             >{{ item.value.toUpperCase() }}</button>
           </div>
           <label>{{ app.t('canvas.aspectRatio') }}</label>
@@ -94,7 +86,7 @@
               :key="item.value"
               type="button"
               :class="{ active: item.value === options.selectedAspect.value }"
-              @click="emit('update', options.aspectPatch(item.value))"
+              @click="updateParams(options.aspectPatch(item.value))"
             >
               <span v-if="item.value !== 'auto'" class="aspect-shape" :style="aspectShape(item.value)" />
               <span>{{ item.label }}</span>
@@ -126,6 +118,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Fold, FullScreen, MagicStick, Operation, PictureFilled } from '@element-plus/icons-vue'
 import CanvasAuthImage from './CanvasAuthImage.vue'
+import CanvasPromptEditor from './CanvasPromptEditor.vue'
 import { useCanvasGenerationOptions } from '@/composables/useCanvasGenerationOptions'
 import { useAppStore } from '@/stores/app'
 import { MAX_GENERATE_INPUTS } from '@/utils/canvasDocument'
@@ -143,6 +136,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   update: [patch: Partial<CanvasGenerateNodeData>]
+  // The user explicitly changed generation parameters; the editor remembers them for new nodes.
+  remember: []
   generate: [request: Omit<CreateImageTaskRequest, 'idempotencyKey'>]
   reference: []
   recharge: []
@@ -153,11 +148,8 @@ const app = useAppStore()
 const options = useCanvasGenerationOptions(() => props.node.data)
 const maxInputs = MAX_GENERATE_INPUTS
 const expanded = ref(false)
-const mentionOpen = ref(false)
 const settingsOpen = ref(false)
 const settingsWrap = ref<HTMLElement | null>(null)
-const promptInput = ref<HTMLTextAreaElement | null>(null)
-let mentionCloseTimer: ReturnType<typeof setTimeout> | null = null
 
 const busy = computed(() => props.runtime?.status === 'submitting' || props.runtime?.status === 'running')
 const inputsReady = computed(() => props.inputs.every((input) => Boolean(input.assetId)))
@@ -222,40 +214,11 @@ function handleSettingsKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') settingsOpen.value = false
 }
 
-function handlePromptInput(event: Event) {
-  const target = event.target as HTMLTextAreaElement
-  emit('update', { prompt: target.value })
-  const caret = target.selectionStart || 0
-  mentionOpen.value = target.value.charAt(caret - 1) === '@'
-}
-
-function handlePromptKeydown(event: KeyboardEvent) {
-  event.stopPropagation()
-  if (event.key === 'Escape') mentionOpen.value = false
-  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-    event.preventDefault()
-    submit()
-  }
-}
-
-async function insertMention(index: number) {
-  const target = promptInput.value
-  const value = props.node.data.prompt || ''
-  const caret = target?.selectionStart ?? value.length
-  const before = value.slice(0, caret).replace(/@$/, '')
-  const token = props.inputs[index]?.label || ''
-  emit('update', { prompt: `${before}${token}${value.slice(caret)}` })
-  mentionOpen.value = false
+// Emitted after reconcile has applied any follow-up patch, so the remembered parameters are already consistent.
+async function updateParams(patch: Partial<CanvasGenerateNodeData>) {
+  emit('update', patch)
   await nextTick()
-  target?.focus()
-  target?.setSelectionRange(before.length + token.length, before.length + token.length)
-}
-
-function closeMentionLater() {
-  if (mentionCloseTimer) clearTimeout(mentionCloseTimer)
-  mentionCloseTimer = setTimeout(() => {
-    mentionOpen.value = false
-  }, 150)
+  emit('remember')
 }
 
 function submit() {
@@ -363,61 +326,6 @@ function aspectShape(code: string) {
   background: transparent;
   color: var(--color-text-muted);
   cursor: pointer;
-}
-
-.prompt-wrap {
-  position: relative;
-}
-
-.prompt-input {
-  width: 100%;
-  height: 90px;
-  margin-top: 10px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--color-text);
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.6;
-  resize: none;
-  outline: none;
-}
-
-.generate-panel.expanded .prompt-input {
-  height: 220px;
-}
-
-.mention-menu {
-  position: absolute;
-  top: 34px;
-  left: 0;
-  z-index: 5;
-  display: flex;
-  min-width: 140px;
-  flex-direction: column;
-  padding: 4px;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-surface);
-  box-shadow: var(--shadow-card-hover);
-}
-
-.mention-menu button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--color-text);
-  text-align: left;
-  cursor: pointer;
-}
-
-.mention-menu button:hover {
-  background: var(--color-primary-soft);
 }
 
 .panel-notice {
