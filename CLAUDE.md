@@ -42,7 +42,7 @@ VITE_DEFAULT_THEME=light
 
 ## 主要路由
 
-除独立全屏的 `/recharge` 外，受保护路由由 [src/layouts/AppLayout.vue](src/layouts/AppLayout.vue) 包裹；未登录会跳转 `/login`。`/admin/models` 与 `/admin/redeem-codes` 还要求当前用户 `isSuperAdmin=true`（路由 `meta.requiresSuperAdmin` + 导航 `superAdminOnly`）。
+除独立全屏的 `/recharge` 外，受保护路由由 [src/layouts/AppLayout.vue](src/layouts/AppLayout.vue) 包裹；未登录会跳转 `/login`。`/admin/users`、`/admin/users/:id`、`/admin/models` 与 `/admin/redeem-codes` 还要求当前用户 `isSuperAdmin=true`（路由 `meta.requiresSuperAdmin` + 导航 `superAdminOnly`）。
 
 - `/canvas`（无限画布列表）
 - `/canvas/:canvasId`（无限画布编辑器，独立全屏，需登录）
@@ -56,6 +56,7 @@ VITE_DEFAULT_THEME=light
 - `/pricing`
 - `/model-status`（模型状态，所有登录用户）
 - `/recharge`
+- `/admin/users`、`/admin/users/:id`（用户管理和积分详情，仅超级管理员）
 - `/admin/models`（模型配置，仅超级管理员）
 - `/admin/redeem-codes`（仅超级管理员）
 - `/profile`

@@ -430,3 +430,7 @@ GPT explicit 分辨率 UI 固定按 `1K、2K、4K` 排列；前端会先规范�
 - `GET /api/ai/model-routes/audits?configId=&page=&pageSize=`：变更记录。
 
 响应永远只有 `apiKeySet` / `apiKeyMask`，不含明文 Key。写请求不在 token 刷新后自动重放。409 机器码：`MODEL_ROUTE_REVISION_CONFLICT`（刷新后重试）、`MODEL_ROUTE_LOCKED_BY_RELEASE`（被已发布尺寸模式版本冻结）、`MODEL_ROUTE_OFFLINE_CONFIRM_REQUIRED`（`details.resolutionCodes`，确认后带 `confirmOffline=true` 重试）；重复路由为 `CONFLICT`。
+
+## 超级管理员用户管理
+
+`services/adminUsers.ts` 通过公共 Axios 实例读取 `/admin/users`。列表使用 `pageIndex/pageSize`，汇总与流水共享带时区的 `from/to`，多选来源编码为重复的 `source`。状态变更通过 `PUT /admin/users/{id}/status` 提交 `status` 和 `reason`，使用 `noAuthRefreshReplayConfig`。

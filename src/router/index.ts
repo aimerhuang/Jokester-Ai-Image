@@ -42,6 +42,8 @@ const router = createRouter({
         { path: 'pricing', name: 'pricing', component: () => import('@/views/PricingView.vue'), meta: { titleKey: 'pricing.title', subtitleKey: 'pricing.subtitle' } },
         { path: 'model-status', name: 'model-status', component: () => import('@/views/ModelStatusView.vue'), meta: { titleKey: 'modelStatus.title', subtitleKey: 'modelStatus.subtitle' } },
         { path: 'admin/models', name: 'model-config', component: () => import('@/views/ModelConfigView.vue'), meta: { titleKey: 'modelConfig.title', subtitleKey: 'modelConfig.subtitle', requiresSuperAdmin: true } },
+        { path: 'admin/users', name: 'admin-users', component: () => import('@/views/UserAdminView.vue'), meta: { titleKey: 'users.title', requiresSuperAdmin: true } },
+        { path: 'admin/users/:id', name: 'admin-user', component: () => import('@/views/UserAdminDetailView.vue'), meta: { titleKey: 'users.detailTitle', requiresSuperAdmin: true } },
         { path: 'admin/redeem-codes', name: 'redeem-code-generator', component: () => import('@/views/RedeemCodeGeneratorView.vue'), meta: { titleKey: 'codeGenerator.title', subtitleKey: 'codeGenerator.subtitle', requiresSuperAdmin: true } },
         { path: 'profile', name: 'profile', component: () => import('@/views/ProfileView.vue'), meta: { titleKey: 'profile.title', subtitleKey: 'profile.subtitle' } },
       ],

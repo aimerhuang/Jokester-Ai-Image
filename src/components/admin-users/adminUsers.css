@@ -1,0 +1,186 @@
+.ua {
+  display: grid;
+  gap: 18px;
+}
+.ua-panel {
+  padding: 22px;
+}
+.ua-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.ua-search {
+  max-width: 360px;
+}
+.ua-toolbar select {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.ua-scroll {
+  overflow: auto;
+}
+.ua table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1040px;
+}
+.ua th,
+.ua td {
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  white-space: nowrap;
+}
+.ua th {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+.ua .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.ua-identity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.ua-identity div {
+  display: grid;
+  gap: 2px;
+}
+.ua-identity small,
+.ua td small {
+  color: var(--color-text-muted);
+}
+.ua-detail {
+  display: grid;
+  gap: 18px;
+}
+.ua-detail-head,
+.ua-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.ua-profile {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.ua-profile h2 {
+  margin: 0 0 6px;
+}
+.ua-profile p {
+  margin: 3px 0;
+  color: var(--color-text-muted);
+}
+.ua-badges {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.ua-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin-top: 20px;
+  color: var(--color-text-muted);
+}
+.ua-facts b {
+  display: block;
+  color: var(--color-text);
+  margin-top: 4px;
+}
+.ua-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.ua-stat {
+  padding: 18px;
+  display: grid;
+  gap: 8px;
+}
+.ua-stat span,
+.ua-stat small {
+  color: var(--color-text-muted);
+}
+.ua-stat strong {
+  font-size: 25px;
+  font-variant-numeric: tabular-nums;
+}
+.ua-summary {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-bottom: 22px;
+}
+.positive {
+  color: #16803a;
+}
+.negative {
+  color: var(--color-danger);
+}
+@media (max-width: 800px) {
+  .ua-cards,
+  .ua-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ua-profile {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .ua-badges {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+.ua-panel {
+  min-width: 0;
+}
+.ua-back {
+  width: fit-content;
+  color: var(--color-primary);
+}
+.ua-detail h2,
+.ua h2 {
+  font-size: 1.15rem;
+}
+.ua-detail table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.ua-detail th,
+.ua-detail td {
+  text-align: start;
+  padding: 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+.ua-detail th {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+.ua-detail td {
+  overflow-wrap: anywhere;
+}
+.ua-detail dd {
+  margin: 4px 0 0;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.ua-panel .el-pagination {
+  max-width: 100%;
+  overflow: auto;
+}
+.ua-detail .positive {
+  color: var(--color-status-normal);
+}
+.ua-detail .negative {
+  color: var(--color-danger);
+}
