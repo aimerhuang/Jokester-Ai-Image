@@ -411,3 +411,22 @@ GPT explicit 分辨率 UI 固定按 `1K、2K、4K` 排列；前端会先规范�
 创建任务后以及任务成功、失败或超时进入最终状态后，前端都会刷新余额和积分流水。任务列表和详情展示 `pointCost` 与 `billingStatus`（预留、确认扣除、部分退款、全额退款结算）；账务状态不等于可用余额增加相同数额，失败文案以最新余额和明细为准，不承诺全额退回可用余额。
 
 任务详情先按 `sizeContractVersion` 解释尺寸；`legacy-unknown` 只读且禁止复用配置，`legacy-aspect-auto` 复用时保留业务分辨率和 auto 比例，`size-mode-v1` auto 复用时不恢复分辨率或比例。
+
+## 模型状态与模型配置
+
+后端契约见 Jokester.Admin `docs/ai-model-config-status-prd.md` 与其 `docs/integration-guide.md`。
+
+### 模型状态（所有登录用户）
+
+`GET /api/ai/images/model-status` 只要求登录。返回 `generatedAt`、`windowHours`、`sampleLimit` 和 `items[]`；每项包含 `modelCode`、`modelName`、`state`（`normal`/`degraded`/`down`/`unknown`）、`availability`（`unknown` 时为 `null`）、`sampleCount`、`fastestSuccessSeconds`、`slowestSuccessSeconds`、`recent`（从旧到新，`1` 成功、`0` 失败）、`recentCompletedAt`（UTC，与 `recent` 等长）和 `lastSampleAt`。前端按 `state` 映射文案，不展示任何接口地址或错误详情。
+
+### 模型配置（超级管理员）
+
+- `GET /api/ai/model-routes`：按模型分组 `[{ modelCode, modelName, state, missingPrimaryRoute, routes[] }]`。
+- `POST /api/ai/model-routes`：新增路由（`apiKey` 必填）。
+- `PUT /api/ai/model-routes/{id}`：编辑路由，必须携带 `revision`；`apiKey` 留空表示不修改。
+- `PUT /api/ai/model-routes/{id}/status`：`{ revision, status, confirmOffline? }`。
+- `POST /api/ai/model-routes/{id}/test`：`{ result: passed | auth_failed | unreachable, httpStatus, elapsedMilliseconds }`。
+- `GET /api/ai/model-routes/audits?configId=&page=&pageSize=`：变更记录。
+
+响应永远只有 `apiKeySet` / `apiKeyMask`，不含明文 Key。写请求不在 token 刷新后自动重放。409 机器码：`MODEL_ROUTE_REVISION_CONFLICT`（刷新后重试）、`MODEL_ROUTE_LOCKED_BY_RELEASE`（被已发布尺寸模式版本冻结）、`MODEL_ROUTE_OFFLINE_CONFIRM_REQUIRED`（`details.resolutionCodes`，确认后带 `confirmOffline=true` 重试）；重复路由为 `CONFLICT`。
