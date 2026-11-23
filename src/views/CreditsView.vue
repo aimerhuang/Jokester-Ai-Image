@@ -142,19 +142,7 @@ import { useCreditsStore } from '@/stores/credits'
 import type { ApiError } from '@/types/api'
 import type { CreditRecord } from '@/types/credits'
 
-const SOURCE_LABEL_KEYS: Record<string, string> = {
-  register: 'credits.sourceRegister',
-  sign_in: 'credits.sourceSignIn',
-  sign_in_expire: 'credits.sourceSignInExpire',
-  recharge: 'credits.sourceRecharge',
-  recharge_expire: 'credits.sourceRechargeExpire',
-  apple_iap: 'credits.sourceAppleIap',
-  apple_iap_expire: 'credits.sourceAppleIapExpire',
-  apple_refund: 'credits.sourceAppleRefund',
-  image_generate: 'credits.sourceImageGenerate',
-  image_refund: 'credits.sourceImageRefund',
-  point_expire: 'credits.sourcePointExpire',
-}
+import { SOURCE_LABEL_KEYS } from '@/utils/pointSources'
 
 const app = useAppStore()
 const auth = useAuthStore()

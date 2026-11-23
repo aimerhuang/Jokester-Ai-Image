@@ -149,6 +149,9 @@ const navItems = [
   { to: '/images', label: 'nav.gallery' },
   { to: '/credits', label: 'nav.credits' },
   { to: '/pricing', label: 'nav.pricing' },
+  { to: '/model-status', label: 'nav.modelStatus' },
+  { to: '/admin/models', label: 'nav.modelConfig', superAdminOnly: true },
+  { to: '/admin/users', label: 'users.title', superAdminOnly: true },
   { to: '/admin/redeem-codes', label: 'nav.codeGenerator', superAdminOnly: true },
   { to: '/profile', label: 'nav.profile' },
 ]

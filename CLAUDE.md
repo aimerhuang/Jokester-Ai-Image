@@ -42,7 +42,7 @@ VITE_DEFAULT_THEME=light
 
 ## 主要路由
 
-除独立全屏的 `/recharge` 外，受保护路由由 [src/layouts/AppLayout.vue](src/layouts/AppLayout.vue) 包裹；未登录会跳转 `/login`。`/admin/redeem-codes` 还要求当前用户 `isSuperAdmin=true`。
+除独立全屏的 `/recharge` 外，受保护路由由 [src/layouts/AppLayout.vue](src/layouts/AppLayout.vue) 包裹；未登录会跳转 `/login`。`/admin/users`、`/admin/users/:id`、`/admin/models` 与 `/admin/redeem-codes` 还要求当前用户 `isSuperAdmin=true`（路由 `meta.requiresSuperAdmin` + 导航 `superAdminOnly`）。
 
 - `/canvas`（无限画布列表）
 - `/canvas/:canvasId`（无限画布编辑器，独立全屏，需登录）
@@ -54,7 +54,10 @@ VITE_DEFAULT_THEME=light
 - `/images/:id/edit`
 - `/credits`
 - `/pricing`
+- `/model-status`（模型状态，所有登录用户）
 - `/recharge`
+- `/admin/users`、`/admin/users/:id`（用户管理和积分详情，仅超级管理员）
+- `/admin/models`（模型配置，仅超级管理员）
 - `/admin/redeem-codes`（仅超级管理员）
 - `/profile`
 
@@ -88,6 +91,14 @@ VITE_DEFAULT_THEME=light
 - 画布强调色为橄榄绿 `--canvas-accent`（定义在 [src/styles/tokens.css](src/styles/tokens.css)，深色主题单独取值），不要再写死紫色。左下角指南针按钮开关小地图，状态存 `localStorage.canvasMinimapOpen`。
 - 交互：左键在空白处拖动是框选（`Shift` 追加），中键或 `Space`+左键拖动平移。多选后浮层按钮“绑组”/“解组”（`Ctrl+G` / `Ctrl+Shift+G`）；组由节点 `groupId` 表示，`getGroups`/`groupNodes`/`ungroupNodes` 在 `canvasDocument.ts`，成员少于 2 个自动解散。点击组内节点先选中整组，未拖动时再次点击选中该节点；切图结果默认成组。
 - E2E：`canvas.e2e.spec.ts`。
+
+## 模型状态与模型配置
+
+- 接口位于 [src/services/models.ts](src/services/models.ts)，类型在 [src/types/models.ts](src/types/models.ts)；后端契约见 Jokester.Admin `docs/ai-model-config-status-prd.md`。
+- 模型状态页 [src/views/ModelStatusView.vue](src/views/ModelStatusView.vue) 读 `GET /ai/images/model-status`：卡片展示状态徽标（`normal/degraded/down/unknown`）、可用性、最快/最慢成功和近 N 次红绿条（从旧到新）。每 60 秒自动刷新，页面不可见时暂停；“刷新状态”点击后 5 秒内不可重复点击；刷新失败保留上次数据；`generatedAt` 超过 5 分钟提示数据可能延迟。状态文案由前端按 `state` 映射，状态色使用 `--color-status-*` token。
+- 模型配置页 [src/views/ModelConfigView.vue](src/views/ModelConfigView.vue) 读写 `/ai/model-routes`，组件在 [src/components/models/](src/components/models/)。API Key 只写不读：列表只显示 `apiKeyMask`，编辑留空表示不修改，保存成功或关闭弹窗即清空输入，不写入任何持久存储。所有写请求使用 `noAuthRefreshReplayConfig`，并携带 `revision`。
+- 错误处理：`MODEL_ROUTE_REVISION_CONFLICT` 提示并重新加载；`MODEL_ROUTE_LOCKED_BY_RELEASE` 提示需走发布命令（被发布引用的路由地址/路径/供应商模型输入框禁用，启用中的路由不能关闭）；`MODEL_ROUTE_OFFLINE_CONFIRM_REQUIRED` 弹窗列出 `details.resolutionCodes`，确认后带 `confirmOffline=true` 重试。修改地址、Key、供应商模型或路径前二次确认，保存后询问是否测试连接。
+- E2E：`model-status-config.e2e.spec.ts`。
 
 ## 用户、积分与资料
 
