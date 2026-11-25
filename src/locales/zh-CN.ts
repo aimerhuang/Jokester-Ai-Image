@@ -932,6 +932,7 @@ export default {
     testPassed: '连接通过（HTTP {status}，{ms} ms）',
     testAuthFailed: '鉴权失败（HTTP {status}），请检查 API Key',
     testUnreachable: '不可达或不支持探测{status}。部分中转站不实现模型列表接口，不代表一定不可用。',
+    sessionRenewedRetry: '登录已自动续期，本次操作未提交，请再操作一次。',
     revisionConflict: '配置已被他人修改，已刷新为最新数据，请重新操作。',
     lockedByRelease: '该路由被已发布的尺寸模式版本冻结，请通过 --configure-ai-image-catalog 发布新版本后再修改地址、路径、供应商模型或禁用。',
     offlineConfirmTitle: '确认下线',
