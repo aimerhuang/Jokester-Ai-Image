@@ -11,6 +11,7 @@ type MockState = {
   statusRequests: Array<Record<string, unknown>>
   updateRequests: Array<Record<string, unknown>>
   testRequests: number[]
+  createRequests: Array<Record<string, unknown>>
   conflictNextUpdate: boolean
 }
 
@@ -78,6 +79,7 @@ function initialRoutes(): Route[] {
     provider: 'openai',
     providerProtocol: 'openai-image',
     providerModel: 'gpt-image-2',
+    gifProviderModel: null as string | null,
     apiKeySet: true,
     apiKeyMask: '••••a1B2',
     apiKeyUpdatedAt: '2026-11-20T03:12:00Z',
@@ -101,6 +103,7 @@ async function mockBackend(page: Page, options: { isSuperAdmin: boolean }): Prom
     statusRequests: [],
     updateRequests: [],
     testRequests: [],
+    createRequests: [],
     conflictNextUpdate: false,
   }
   await page.addInitScript(() => {
@@ -140,7 +143,22 @@ async function mockBackend(page: Page, options: { isSuperAdmin: boolean }): Prom
       return failure(403, 'RESOURCE_FORBIDDEN', 'forbidden')
     }
     if (path === '/api/ai/model-routes' && method === 'GET') {
-      return success([{ modelCode: 'gpt-image-2', modelName: 'WxAi-image-2', state: 'normal', missingPrimaryRoute: false, routes: state.routes }])
+      const codes = [...new Set(state.routes.map((item) => String(item.modelCode)))]
+      return success(codes.map((code) => {
+        const routes = state.routes.filter((item) => item.modelCode === code)
+        return { modelCode: code, modelName: routes[0].modelName, state: code === 'gpt-image-2' ? 'normal' : null, missingPrimaryRoute: false, routes }
+      }))
+    }
+    if (path === '/api/ai/model-routes' && method === 'POST') {
+      const payload = request.postDataJSON() as Record<string, unknown>
+      state.createRequests.push(payload)
+      const { apiKey: _apiKey, ...rest } = payload
+      const created: Route = {
+        ...rest, id: 90 + state.createRequests.length, revision: 1, status: payload.status as 0 | 1, providerProtocol: String(payload.provider),
+        apiKeySet: true, apiKeyMask: '••••' + String(payload.apiKey).slice(-4), publishedCatalogVersions: [], updatedAt: new Date().toISOString(), updatedBy: 'admin',
+      }
+      state.routes.push(created)
+      return success(created)
     }
     if (path === '/api/ai/model-routes/audits') {
       return success({ items: [], total: 0, pageIndex: 1, pageSize: 50 })
@@ -174,6 +192,7 @@ async function mockBackend(page: Page, options: { isSuperAdmin: boolean }): Prom
       Object.assign(target, {
         providerModel: payload.providerModel,
         baseUrl: payload.baseUrl,
+        gifProviderModel: payload.gifProviderModel === undefined ? target.gifProviderModel : (payload.gifProviderModel || null),
         revision: target.revision + 1,
         apiKeyMask: payload.apiKey ? `••••${String(payload.apiKey).slice(-4)}` : target.apiKeyMask,
       })
@@ -279,5 +298,79 @@ test.describe('model config', () => {
     await messageBox(page, '1K').getByRole('button', { name: '确认下线' }).click()
     await expect.poll(() => state.statusRequests.map((item) => item.confirmOffline)).toEqual([false, true])
     await expect(page.getByTestId('route-status-11')).not.toHaveClass(/is-checked/)
+  })
+})
+
+test.describe('model config: new model', () => {
+  test('super admin creates a new model with its primary route and is pointed at pricing', async ({ page }) => {
+    const state = await mockBackend(page, { isSuperAdmin: true })
+    await page.goto(`${baseUrl}/admin/models`, { waitUntil: 'networkidle' })
+
+    await page.getByTestId('model-config-add-model').click()
+    const dialog = page.locator('.model-route-dialog')
+    await expect(dialog.locator('.el-dialog__title')).toHaveText('新增模型')
+    const form = page.getByTestId('model-route-form')
+    // The first route of a new model is always the primary route.
+    await expect(form.locator('.el-radio-button.is-active')).toHaveText('主路由')
+    await expect(form.locator('.el-radio-button.is-disabled')).toHaveCount(2)
+
+    await form.getByTestId('route-model-code').fill('gpt-image-2')
+    await form.getByTestId('route-model-name').fill('WxAi-image-3')
+    await form.getByTestId('route-provider-model').fill('gpt-image-3')
+    await form.getByTestId('route-base-url').fill('https://relay-new.example.com/v1')
+    await form.getByTestId('route-api-key').fill('sk-new-model-4321')
+    await page.getByTestId('route-save').click()
+    await expect(form).toContainText('该模型编码已存在')
+    expect(state.createRequests).toHaveLength(0)
+
+    await form.getByTestId('route-model-code').fill('GPT Image 3')
+    await page.getByTestId('route-save').click()
+    await expect(form).toContainText('模型编码需为 2–100 位')
+
+    await form.getByTestId('route-model-code').fill('GPT-Image-3')
+    await page.getByTestId('route-save').click()
+    await expect.poll(() => state.createRequests.length).toBe(1)
+    expect(state.createRequests[0]).toMatchObject({
+      modelCode: 'gpt-image-3', modelName: 'WxAi-image-3', routeRole: 'primary', provider: 'openai-image',
+      providerModel: 'gpt-image-3', baseUrl: 'https://relay-new.example.com/v1', apiKey: 'sk-new-model-4321', status: 1,
+    })
+
+    await expect(page.locator('.model-group[data-model-code="gpt-image-3"] h2')).toHaveText('WxAi-image-3')
+    await messageBox(page, '是否立即测试连接？').getByRole('button', { name: '稍后' }).click()
+    await messageBox(page, '新模型需要在“生图定价”中配置价格').getByRole('button', { name: '去配置价格' }).click()
+    await expect(page).toHaveURL(/\/admin\/pricing$/)
+  })
+
+  test('super admin turns GIF output on and off per route', async ({ page }) => {
+    const state = await mockBackend(page, { isSuperAdmin: true })
+    await page.goto(`${baseUrl}/admin/models`, { waitUntil: 'networkidle' })
+    await expect(page.getByTestId('model-gif-tag')).toHaveCount(0)
+
+    // GIF runs on the legacy queue, so a route frozen by a size-mode release can still change its GIF model.
+    await page.getByTestId('route-edit-12').click()
+    const form = page.getByTestId('model-route-form')
+    const gifInput = form.getByTestId('route-gif-provider-model')
+    await expect(gifInput).toBeEnabled()
+    await expect(gifInput).toHaveValue('')
+    await gifInput.fill('gpt-image-2-native')
+    await page.getByTestId('route-save').click()
+    await messageBox(page, '确认保存').getByRole('button', { name: '确认' }).click()
+    await expect.poll(() => state.updateRequests.length).toBe(1)
+    expect(state.updateRequests[0]).toMatchObject({ revision: 1, gifProviderModel: 'gpt-image-2-native' })
+    await messageBox(page, '是否立即测试连接？').getByRole('button', { name: '稍后' }).click()
+    await expect(page.getByTestId('route-gif-12')).toHaveText('GIF · gpt-image-2-native')
+    await expect(page.getByTestId('model-gif-tag')).toHaveText('支持 GIF')
+
+    // Clearing the field sends an empty string, which switches GIF off for the route.
+    await page.getByTestId('route-edit-12').click()
+    await expect(gifInput).toHaveValue('gpt-image-2-native')
+    await gifInput.fill('')
+    await page.getByTestId('route-save').click()
+    await messageBox(page, '确认保存').getByRole('button', { name: '确认' }).click()
+    await expect.poll(() => state.updateRequests.length).toBe(2)
+    expect(state.updateRequests[1]).toMatchObject({ gifProviderModel: '' })
+    await messageBox(page, '是否立即测试连接？').getByRole('button', { name: '稍后' }).click()
+    await expect(page.getByTestId('route-gif-12')).toHaveCount(0)
+    await expect(page.getByTestId('model-gif-tag')).toHaveCount(0)
   })
 })

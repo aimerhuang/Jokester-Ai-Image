@@ -3,6 +3,8 @@ import { ElMessage } from 'element-plus'
 import { createImageTask, getImageRecord } from '@/services/aiImages'
 import { registerAiResultAsset } from '@/services/canvases'
 import { normalizeTaskStatus } from '@/composables/useImageTaskPolling'
+import { getStoredToken } from '@/services/http'
+import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import { useCreditsStore } from '@/stores/credits'
 import { MAX_GENERATION_RUNS, createIdempotencyKey, findNode, readTaskIds } from '@/utils/canvasDocument'
@@ -30,12 +32,13 @@ interface GenerationOptions {
   getDocument: () => CanvasDocument
   markChanged: () => void
   flush: () => Promise<void>
-  requestConsent: () => Promise<boolean>
+  onVipRequired: (modelCode: string) => Promise<void>
   onCatalogChanged: () => Promise<void>
 }
 
 export function useCanvasGeneration(options: GenerationOptions) {
   const app = useAppStore()
+  const auth = useAuthStore()
   const credits = useCreditsStore()
   const runtime = reactive(new Map<string, CanvasNodeRuntime>())
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -68,11 +71,17 @@ export function useCanvasGeneration(options: GenerationOptions) {
       node.data.pendingIdempotencyKey = key
       options.markChanged()
     }
+    const token = auth.token
+    const userId = auth.user?.id
     await options.flush().catch(() => undefined)
-    await send(nodeId, { ...request, idempotencyKey: key }, true)
+    if (disposed || !userId || auth.user?.id !== userId || token !== auth.token || token !== getStoredToken()) {
+      state.status = 'idle'
+      return
+    }
+    await send(nodeId, { ...request, idempotencyKey: key })
   }
 
-  async function send(nodeId: string, request: CreateImageTaskRequest, allowConsent: boolean) {
+  async function send(nodeId: string, request: CreateImageTaskRequest) {
     const state = stateOf(nodeId)
     try {
       const response = await createImageTask(request)
@@ -94,22 +103,19 @@ export function useCanvasGeneration(options: GenerationOptions) {
     } catch (cause) {
       const error = cause as ApiError
       const code = String(error?.code || '').trim().toUpperCase()
-      if (allowConsent && code === 'AI_CONSENT_REQUIRED') {
-        if (await options.requestConsent()) return send(nodeId, request, false)
-        clearPendingKey(nodeId)
-        state.status = 'idle'
-        return
-      }
       state.status = 'failed'
       state.error = describeError(error, code)
       // Only definite rejections free the key; unknown outcomes keep it so a retry cannot double charge.
       if (error?.status && error.status < 500) clearPendingKey(nodeId)
-      if (code === 'IMAGE_CATALOG_CHANGED' || code === 'AUTO_SIZE_NOT_SUPPORTED') await options.onCatalogChanged()
-      ElMessage.warning(state.error)
+      if (['IMAGE_CATALOG_CHANGED', 'AUTO_SIZE_NOT_SUPPORTED', 'VIP_REQUIRED', 'PRICE_CHANGED'].includes(code)) await options.onCatalogChanged()
+      if (code === 'VIP_REQUIRED') await options.onVipRequired(request.modelCode)
+      else ElMessage.warning(state.error)
     }
   }
 
   function describeError(error: ApiError, code: string) {
+    if (code === 'VIP_REQUIRED') return app.t('vipPricing.locked')
+    if (code === 'PRICE_CHANGED') return app.t('vipPricing.changed').replace('{price}', String((error.details as { effectivePoints?: number })?.effectivePoints ?? '—'))
     if (!error?.status) return app.t('canvas.generationUnknown')
     if (code === 'PROMPT_BLOCKED' || error.status === 422) return app.t('playground.promptBlocked')
     if (code === 'RATE_LIMITED' || error.status === 429) {

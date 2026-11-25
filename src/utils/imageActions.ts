@@ -1,10 +1,13 @@
-import type { GeneratedImageBatchItem, ImageRecord, ImageSizeMode } from '@/types/image'
+import type { GeneratedImageBatchItem, ImageRecord, ImageOutputFormat, ImageSizeMode } from '@/types/image'
 import { fetchMediaBlob, isAuthenticatedMediaUrl } from '@/utils/authenticatedMedia'
 
 export const FAVORITES_STORAGE_KEY = 'jokester:image:favorites'
 export const REUSE_CONFIG_STORAGE_KEY = 'jokester:image:reuse-config'
 
 export interface ReuseImageConfig {
+  outputFormat?: ImageOutputFormat
+  frameCount?: number | null
+  frameDurationMs?: number | null
   prompt?: string
   sourcePromptId?: number
   modelName?: string
@@ -158,17 +161,20 @@ export function toggleRecordFavorite(record: ImageRecord) {
   return next
 }
 
-export async function downloadImage(url: string, filename = 'generated-image.png') {
+const extensionsByType: Record<string, string> = { 'image/gif': 'gif', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/png': 'png' }
+
+export async function downloadImage(url: string, basename = 'generated-image') {
   if (!url) return false
 
+  const urlExtension = url.split(/[?#]/)[0].match(/\.(gif|jpe?g|webp|png)$/i)?.[1]?.toLowerCase() || 'png'
   try {
     const blob = await fetchMediaBlob(url)
     const objectUrl = URL.createObjectURL(blob)
-    triggerDownload(objectUrl, filename)
+    triggerDownload(objectUrl, `${basename}.${extensionsByType[blob.type.toLowerCase()] || urlExtension}`)
     URL.revokeObjectURL(objectUrl)
     return true
   } catch {
-    if (!isAuthenticatedMediaUrl(url)) triggerDownload(url, filename)
+    if (!isAuthenticatedMediaUrl(url)) triggerDownload(url, `${basename}.${urlExtension}`)
     return false
   }
 }

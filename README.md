@@ -92,6 +92,7 @@ npx playwright install chromium
 - `/images/:id/edit`：图片详情、复用参数、收藏、下载
 - `/credits`：积分明细
 - `/pricing`：生图模型、分辨率和画质的积分定价
+- `/admin/pricing`：超级管理员批量调整标准价、VIP 价、折扣、模型访问策略和查询变更记录
 - `/recharge`：积分充值、创建订单和兑换充值卡密
 - `/admin/redeem-codes`：超级管理员按动态套餐或自定义积分批量签发兑换码
 - `/profile`：头像、昵称、密码和登出

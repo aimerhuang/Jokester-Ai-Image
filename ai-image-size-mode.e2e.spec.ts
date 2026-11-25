@@ -331,7 +331,7 @@ function selectedSegmentBackgroundsAreAligned(page: Page) {
   }))
 }
 
-test('migrates a version 1 GPT auto draft to legal explicit v2 state when auto is unavailable', async ({ page }) => {
+test('migrates a version 1 GPT auto draft to legal explicit state when auto is unavailable', async ({ page }) => {
   const state = await mockBackend(page, { explicitOnly: true })
   await page.addInitScript(() => {
     sessionStorage.setItem('playgroundDraft', JSON.stringify({
@@ -353,7 +353,7 @@ test('migrates a version 1 GPT auto draft to legal explicit v2 state when auto i
 
   await expect(page.getByText('自动尺寸', { exact: true })).toHaveCount(0)
   await expect(page.getByText('输出分辨率', { exact: true })).toBeVisible()
-  await expect.poll(async () => page.evaluate(() => JSON.parse(sessionStorage.getItem('playgroundDraft') || '{}').version)).toBe(2)
+  await expect.poll(async () => page.evaluate(() => JSON.parse(sessionStorage.getItem('playgroundDraft') || '{}').version)).toBe(3)
   const storedDraft = await page.evaluate(() => JSON.parse(sessionStorage.getItem('playgroundDraft') || '{}'))
   expect(storedDraft.draft).toMatchObject({
     sizeContractVersion: 'size-mode-v1',

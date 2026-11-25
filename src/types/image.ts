@@ -19,6 +19,7 @@ export interface ImageParameterOption {
   valueInt2?: number | null
   sort?: number
   provider?: string
+  access?: { level: string; available: boolean; basis?: string | null; reasonCode?: string | null }
   providerCode?: string
   capabilities?: ImageModelCapabilities
   resolutions?: string[]
@@ -28,7 +29,33 @@ export interface ImageParameterOption {
   catalogVersion?: string
 }
 
+export type ImageOutputFormat = 'png' | 'gif'
+
+export interface GifTokenRate {
+  officialUsdPerMillion: number
+  platformCnyPerMillion: number
+}
+
+export interface GifTokenPricing {
+  usdToCny: number
+  discountRate: number
+  cnyPerPoint: number
+  textInput: GifTokenRate
+  imageInput: GifTokenRate
+  output: GifTokenRate
+}
+
+export interface GifCapability {
+  frameCounts: number[]
+  defaultFrameCount: number
+  frameDurationsMs: number[]
+  defaultFrameDurationMs: number
+  tokenPricing: GifTokenPricing
+  reserve: { basePoints: number; perFramePoints: Record<string, number>; perReferencePoints: number }
+}
+
 export interface ImageModelCapabilities {
+  gif?: GifCapability | null
   supportsReferenceImages: boolean
   maxReferenceImages: number
   supportsQuality: boolean
@@ -46,6 +73,7 @@ export interface ImageParameterApiOption {
   valueInt1?: number | null
   valueInt2?: number | null
   sort: number
+  access?: { level: string; available: boolean; basis?: string | null; reasonCode?: string | null }
   providerCode?: string
   capabilities?: ImageModelCapabilities
   resolutions?: string[]
@@ -61,6 +89,9 @@ export interface AiImagePointPrice {
   resolutionCode: string | null
   qualityCode: string
   points: number
+  effectivePoints?: number
+  vipPoints?: number | null
+  pricingTier?: string
   priceAmount: number
   priceMinorUnits?: number
   currency: string
@@ -68,12 +99,14 @@ export interface AiImagePointPrice {
 }
 
 export interface AiImagePricingEnvelope {
+  pricingRevision?: number
   modelCode: string
   catalogVersion: string
   items: AiImagePointPrice[]
 }
 
 export interface ImageParameters {
+  pricingRevision?: number
   models: ImageParameterOption[]
   resolutions: ImageParameterOption[]
   qualities: ImageParameterOption[]
@@ -82,6 +115,7 @@ export interface ImageParameters {
 }
 
 export interface ImageParametersResponse {
+  pricingRevision?: number
   resolutions: ImageParameterApiOption[]
   qualities: ImageParameterApiOption[]
   aspectRatios: ImageParameterApiOption[]
@@ -113,6 +147,10 @@ export interface ResolveImageParametersResponse {
 }
 
 export interface CreateImageTaskRequest {
+  outputFormat?: ImageOutputFormat
+  frameCount?: number
+  frameDurationMs?: number
+  expectedUnitPoints?: number
   idempotencyKey: string
   sourcePromptId?: number
   prompt: string
@@ -187,6 +225,16 @@ export interface GeneratedImageBatchItem {
 }
 
 export interface GeneratedImageResult {
+  outputFormat?: ImageOutputFormat
+  frameCount?: number | null
+  frameDurationMs?: number | null
+  outputMimeType?: string | null
+  chargedPoints?: number | null
+  platformCostCny?: number | null
+  usage?: { inputTokens: number; inputBreakdown: 'split' | 'unsplit'; textInputTokens: number | null; imageInputTokens: number | null; outputTokens: number } | null
+  unitPointCost?: number | null
+  listUnitPointCost?: number | null
+  pricingTier?: string | null
   id?: number | string
   taskId?: number | string
   sourcePromptId?: number | null

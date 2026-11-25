@@ -1,6 +1,7 @@
 export type ModelStatusState = 'normal' | 'degraded' | 'down' | 'unknown'
 
 export interface ModelStatusItem {
+  vipOnly?: boolean
   modelCode: string
   modelName: string
   state: ModelStatusState
@@ -37,6 +38,8 @@ export interface ModelRoute {
   provider: string
   providerProtocol: string | null
   providerModel: string
+  /** Native GIF provider model; null means this route cannot produce GIFs. */
+  gifProviderModel: string | null
   baseUrl: string
   apiKeySet: boolean
   apiKeyMask: string | null
@@ -71,6 +74,7 @@ export interface CreateModelRouteRequest {
   routeRole: ModelRouteRole
   provider: string
   providerModel: string
+  gifProviderModel?: string
   baseUrl: string
   apiKey: string
   textToImagePath?: string
@@ -84,6 +88,8 @@ export interface UpdateModelRouteRequest {
   revision: number
   modelName: string
   providerModel: string
+  /** Empty string turns GIF output off; omitted keeps the current value. */
+  gifProviderModel?: string
   baseUrl: string
   /** Empty keeps the current key. */
   apiKey?: string

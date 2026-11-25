@@ -1,6 +1,9 @@
 <template>
   <el-config-provider :locale="elementLocale">
-    <router-view />
+    <router-view v-slot="{ Component, route }">
+      <!-- Remount the canvas editor when switching canvases (e.g. "New canvas" from inside the editor). -->
+      <component :is="Component" :key="route.name === 'canvas-editor' ? `canvas:${route.params.canvasId}` : undefined" />
+    </router-view>
   </el-config-provider>
 </template>
 

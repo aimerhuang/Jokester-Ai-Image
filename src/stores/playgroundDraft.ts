@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { ImageSizeMode } from '@/types/image'
+import type { ImageOutputFormat, ImageSizeMode } from '@/types/image'
 
 const DRAFT_STORAGE_KEY = 'playgroundDraft'
-const DRAFT_STORAGE_VERSION = 2
+const DRAFT_STORAGE_VERSION = 3
 
 export interface PlaygroundReferenceDraft {
   url: string
@@ -11,6 +11,9 @@ export interface PlaygroundReferenceDraft {
 }
 
 export interface PlaygroundDraftSnapshot {
+  outputFormat: ImageOutputFormat
+  frameCount?: number
+  frameDurationMs?: number
   prompt: string
   modelCode: string
   resolutionCode: string
@@ -35,6 +38,7 @@ interface StoredPlaygroundDraft {
 
 function emptyDraft(): PlaygroundDraftSnapshot {
   return {
+    outputFormat: 'png',
     prompt: '',
     modelCode: '',
     resolutionCode: '',
@@ -111,7 +115,7 @@ export const usePlaygroundDraftStore = defineStore('playgroundDraft', () => {
     hydrated = true
     try {
       const parsed = JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY) || 'null') as Partial<StoredPlaygroundDraft> | null
-      if (!parsed || ![1, DRAFT_STORAGE_VERSION].includes(Number(parsed.version)) || !parsed.draft) return
+      if (!parsed || ![1, 2, DRAFT_STORAGE_VERSION].includes(Number(parsed.version)) || !parsed.draft) return
       ownerUserId.value = typeof parsed.ownerUserId === 'number' ? parsed.ownerUserId : null
       manualPrompt.value = typeof parsed.manualPrompt === 'string' ? parsed.manualPrompt : ''
       draft.value = normalizeDraft(parsed.draft)
@@ -145,6 +149,9 @@ export const usePlaygroundDraftStore = defineStore('playgroundDraft', () => {
 function normalizeDraft(value: Partial<PlaygroundDraftSnapshot>): PlaygroundDraftSnapshot {
   const imageCount = Number(value.imageCount)
   return {
+    outputFormat: value.outputFormat === 'gif' ? 'gif' : 'png',
+    frameCount: value.frameCount,
+    frameDurationMs: value.frameDurationMs,
     prompt: typeof value.prompt === 'string' ? value.prompt : '',
     modelCode: typeof value.modelCode === 'string' ? value.modelCode : '',
     resolutionCode: typeof value.resolutionCode === 'string' ? value.resolutionCode : '',

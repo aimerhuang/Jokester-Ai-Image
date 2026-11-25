@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     :model-value="modelValue"
-    :title="isEdit ? app.t('modelConfig.editTitle') : app.t('modelConfig.createTitle')"
+    :title="isEdit ? app.t('modelConfig.editTitle') : newModel ? app.t('modelConfig.createModelTitle') : app.t('modelConfig.createTitle')"
     width="600px"
     class="model-route-dialog"
     destroy-on-close
@@ -14,13 +14,20 @@
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="route-form" data-testid="model-route-form" @submit.prevent>
       <div class="form-grid">
         <el-form-item :label="app.t('modelConfig.model')" prop="modelCode">
-          <el-select v-if="!isEdit" v-model="form.modelCode" filterable data-testid="route-model-select" @change="handleModelChange">
+          <el-input
+            v-if="newModel && !isEdit"
+            v-model="form.modelCode"
+            maxlength="100"
+            :placeholder="app.t('modelConfig.modelCodePlaceholder')"
+            data-testid="route-model-code"
+          />
+          <el-select v-else-if="!isEdit" v-model="form.modelCode" filterable data-testid="route-model-select" @change="handleModelChange">
             <el-option v-for="group in groups" :key="group.modelCode" :label="`${group.modelName} (${group.modelCode})`" :value="group.modelCode" />
           </el-select>
           <el-input v-else :model-value="form.modelCode" disabled />
         </el-form-item>
         <el-form-item :label="app.t('modelConfig.modelName')" prop="modelName">
-          <el-input v-model="form.modelName" maxlength="100" />
+          <el-input v-model="form.modelName" maxlength="100" data-testid="route-model-name" />
         </el-form-item>
 
         <el-form-item :label="app.t('modelConfig.resolution')">
@@ -31,7 +38,7 @@
           <el-input v-else :model-value="form.resolutionCode ? form.resolutionCode.toUpperCase() : app.t('modelConfig.generic')" disabled />
         </el-form-item>
         <el-form-item :label="app.t('modelConfig.role')">
-          <el-radio-group v-model="form.routeRole" :disabled="isEdit">
+          <el-radio-group v-model="form.routeRole" :disabled="isEdit || newModel">
             <el-radio-button value="primary">{{ app.t('modelConfig.rolePrimary') }}</el-radio-button>
             <el-radio-button value="fallback">{{ app.t('modelConfig.roleFallback') }}</el-radio-button>
           </el-radio-group>
@@ -46,6 +53,18 @@
           <el-input v-model="form.providerModel" maxlength="100" :disabled="locked" data-testid="route-provider-model" />
         </el-form-item>
       </div>
+
+      <el-form-item :label="app.t('modelConfig.gifProviderModel')" prop="gifProviderModel">
+        <el-input
+          v-model="form.gifProviderModel"
+          maxlength="100"
+          clearable
+          :disabled="!supportsGifField"
+          :placeholder="app.t('modelConfig.gifProviderModelPlaceholder')"
+          data-testid="route-gif-provider-model"
+        />
+        <span class="field-hint">{{ supportsGifField ? app.t('modelConfig.gifProviderModelHint') : app.t('modelConfig.gifProviderModelUnsupported') }}</span>
+      </el-form-item>
 
       <el-form-item :label="app.t('modelConfig.baseUrl')" prop="baseUrl">
         <el-input v-model="form.baseUrl" maxlength="500" :placeholder="app.t('modelConfig.baseUrlPlaceholder')" :disabled="locked" data-testid="route-base-url" />
@@ -84,6 +103,7 @@
           <el-switch v-model="form.enabled" :active-text="app.t('modelConfig.enabled')" />
         </el-form-item>
       </div>
+      <p v-if="newModel && !isEdit" class="field-hint">{{ app.t('modelConfig.modelCodeHint') }}</p>
       <p class="field-hint">{{ app.t('modelConfig.modelNameHint') }}</p>
     </el-form>
 
@@ -109,6 +129,8 @@ const props = defineProps<{
   groups: ModelRouteGroup[]
   resolutionOptions: string[]
   defaultModelCode?: string
+  /** Create the first (primary) route of a model that does not exist yet. */
+  newModel?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -127,6 +149,7 @@ const form = reactive({
   routeRole: 'primary' as ModelRouteRole,
   provider: '',
   providerModel: '',
+  gifProviderModel: '',
   baseUrl: '',
   apiKey: '',
   textToImagePath: '/images/generations',
@@ -139,16 +162,23 @@ const form = reactive({
 const isEdit = computed(() => Boolean(props.route))
 const locked = computed(() => Boolean(props.route?.publishedCatalogVersions.length))
 const providerOptions = computed(() => [...new Set([
-  'openai',
+  'openai-image',
   'gemini-image',
   ...props.groups.flatMap((group) => group.routes.map((route) => route.provider)),
 ])].filter(Boolean))
+// Native GIF output only exists on the OpenAI Images protocol.
+const supportsGifField = computed(() => {
+  const protocol = props.route?.providerProtocol ?? form.provider.trim().toLowerCase()
+  return !protocol.includes('gemini')
+})
 const apiKeyPlaceholder = computed(() => isEdit.value
   ? app.t('modelConfig.apiKeyKeepPlaceholder').replace('{mask}', props.route?.apiKeyMask || app.t('modelConfig.apiKeyMissing'))
   : app.t('modelConfig.apiKeyNewPlaceholder'))
 
 const rules = computed<FormRules>(() => ({
-  modelCode: [requiredRule('model')],
+  modelCode: props.newModel && !isEdit.value
+    ? [requiredRule('model'), { validator: validateNewModelCode, trigger: 'blur' }]
+    : [requiredRule('model')],
   modelName: [requiredRule('modelName')],
   provider: [requiredRule('provider')],
   providerModel: [requiredRule('providerModel')],
@@ -158,6 +188,15 @@ const rules = computed<FormRules>(() => ({
 
 function requiredRule(field: string) {
   return { required: true, whitespace: true, message: app.t('modelConfig.required').replace('{field}', app.t(`modelConfig.${field}`)), trigger: 'blur' }
+}
+
+const MODEL_CODE_PATTERN = /^[a-z0-9][a-z0-9._-]{1,99}$/
+
+function validateNewModelCode(_rule: unknown, value: string, callback: (error?: Error) => void) {
+  const code = (value || '').trim().toLowerCase()
+  if (!MODEL_CODE_PATTERN.test(code)) return callback(new Error(app.t('modelConfig.modelCodeInvalid')))
+  if (props.groups.some((group) => group.modelCode === code)) return callback(new Error(app.t('modelConfig.modelCodeExists')))
+  callback()
 }
 
 function resetForm() {
@@ -170,6 +209,7 @@ function resetForm() {
       routeRole: route.routeRole,
       provider: route.provider,
       providerModel: route.providerModel,
+      gifProviderModel: route.gifProviderModel ?? '',
       baseUrl: route.baseUrl,
       apiKey: '',
       textToImagePath: route.textToImagePath,
@@ -186,6 +226,7 @@ function resetForm() {
       routeRole: 'fallback',
       provider: '',
       providerModel: '',
+      gifProviderModel: '',
       baseUrl: '',
       apiKey: '',
       textToImagePath: '/images/generations',
@@ -194,8 +235,12 @@ function resetForm() {
       sort: 0,
       enabled: true,
     })
-    const initial = props.defaultModelCode || props.groups[0]?.modelCode
-    if (initial) handleModelChange(initial)
+    if (props.newModel) {
+      Object.assign(form, { routeRole: 'primary', provider: 'openai-image' })
+    } else {
+      const initial = props.defaultModelCode || props.groups[0]?.modelCode
+      if (initial) handleModelChange(initial)
+    }
   }
   formRef.value?.clearValidate()
 }
@@ -219,6 +264,7 @@ function hasSensitiveChange(route: ModelRoute) {
   return Boolean(form.apiKey.trim())
     || form.baseUrl.trim() !== route.baseUrl
     || form.providerModel.trim() !== route.providerModel
+    || form.gifProviderModel.trim() !== (route.gifProviderModel ?? '')
     || form.textToImagePath.trim() !== route.textToImagePath
     || form.imageToImagePath.trim() !== route.imageToImagePath
 }
@@ -243,6 +289,7 @@ async function submit() {
         revision: route.revision,
         modelName: form.modelName.trim(),
         providerModel: form.providerModel.trim(),
+        gifProviderModel: supportsGifField.value ? form.gifProviderModel.trim() : undefined,
         baseUrl: form.baseUrl.trim(),
         apiKey: form.apiKey.trim() || undefined,
         textToImagePath: form.textToImagePath.trim() || undefined,
@@ -251,12 +298,13 @@ async function submit() {
         sort: form.sort,
       })
       : await createModelRoute({
-        modelCode: form.modelCode,
+        modelCode: form.modelCode.trim().toLowerCase(),
         modelName: form.modelName.trim(),
         resolutionCode: form.resolutionCode,
         routeRole: form.routeRole,
         provider: form.provider.trim(),
         providerModel: form.providerModel.trim(),
+        gifProviderModel: supportsGifField.value && form.gifProviderModel.trim() ? form.gifProviderModel.trim() : undefined,
         baseUrl: form.baseUrl.trim(),
         apiKey: form.apiKey.trim(),
         textToImagePath: form.textToImagePath.trim() || undefined,

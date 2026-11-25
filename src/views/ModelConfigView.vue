@@ -10,6 +10,9 @@
         <el-option :label="app.t('modelConfig.statusDisabled')" value="disabled" />
       </el-select>
       <div class="toolbar-actions">
+        <el-button type="primary" class="soft-button" data-testid="model-config-add-model" @click="openCreateModel">
+          <el-icon><Plus /></el-icon><span>{{ app.t('modelConfig.addModel') }}</span>
+        </el-button>
         <el-button class="soft-button" :loading="loading" @click="load">
           <el-icon><Refresh /></el-icon><span>{{ app.t('modelConfig.refresh') }}</span>
         </el-button>
@@ -35,6 +38,7 @@
           <code>{{ group.modelCode }}</code>
           <ModelStatusBadge v-if="group.state" :state="group.state" />
           <el-tag v-if="group.missingPrimaryRoute" type="warning" size="small" effect="plain" disable-transitions>{{ app.t('modelConfig.missingPrimary') }}</el-tag>
+          <el-tag v-if="offersGif(group)" type="success" size="small" effect="plain" disable-transitions data-testid="model-gif-tag">{{ app.t('modelConfig.gifEnabled') }}</el-tag>
         </div>
         <el-button type="primary" class="soft-button" plain @click="openCreate(group.modelCode)">
           <el-icon><Plus /></el-icon><span>{{ app.t('modelConfig.addRoute') }}</span>
@@ -75,6 +79,7 @@
             <div class="stacked-cell">
               <span class="ellipsis" :title="row.providerModel">{{ row.providerModel }}</span>
               <span class="muted">{{ row.providerProtocol || row.provider }}</span>
+              <span v-if="row.gifProviderModel" class="gif-model ellipsis" :title="row.gifProviderModel" :data-testid="`route-gif-${row.id}`">GIF · {{ row.gifProviderModel }}</span>
             </div>
           </template>
         </el-table-column>
@@ -117,6 +122,7 @@
       :groups="groups"
       :resolution-options="resolutionOptions"
       :default-model-code="createModelCode"
+      :new-model="creatingModel"
       @saved="handleSaved"
       @failed="handleError"
     />
@@ -126,6 +132,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CopyDocument, Document, Lock, Plus, Refresh, Search } from '@element-plus/icons-vue'
@@ -140,6 +147,7 @@ import type { ApiError } from '@/types/api'
 import type { ModelRoute, ModelRouteGroup } from '@/types/models'
 
 const app = useAppStore()
+const router = useRouter()
 const groups = ref<ModelRouteGroup[]>([])
 const loading = ref(false)
 const loadError = ref(false)
@@ -149,6 +157,7 @@ const parameterResolutions = ref<string[]>([])
 const formVisible = ref(false)
 const editingRoute = ref<ModelRoute | null>(null)
 const createModelCode = ref<string>()
+const creatingModel = ref(false)
 const auditVisible = ref(false)
 const auditRoute = ref<ModelRoute | null>(null)
 const statusSaving = ref<number | null>(null)
@@ -202,18 +211,33 @@ function replaceRoute(updated: ModelRoute) {
   }
 }
 
+/** Mirrors the backend: an enabled route with a key and a native GIF model makes the model GIF-capable. */
+function offersGif(group: ModelRouteGroup) {
+  return group.routes.some((route) => route.status === 1 && route.apiKeySet && Boolean(route.gifProviderModel)
+    && !(route.providerProtocol ?? route.provider).includes('gemini'))
+}
+
 function isDisableLocked(route: ModelRoute) {
   return route.status === 1 && route.publishedCatalogVersions.length > 0
 }
 
 function openCreate(modelCode?: string) {
   editingRoute.value = null
+  creatingModel.value = false
   createModelCode.value = modelCode
+  formVisible.value = true
+}
+
+function openCreateModel() {
+  editingRoute.value = null
+  creatingModel.value = true
+  createModelCode.value = undefined
   formVisible.value = true
 }
 
 function openEdit(route: ModelRoute) {
   editingRoute.value = route
+  creatingModel.value = false
   formVisible.value = true
 }
 
@@ -223,15 +247,26 @@ function openAudits(route: ModelRoute | null) {
 }
 
 async function handleSaved(route: ModelRoute, created: boolean) {
+  const newModel = created && creatingModel.value
+  creatingModel.value = false
   ElMessage.success(app.t(created ? 'modelConfig.createSuccess' : 'modelConfig.saveSuccess'))
   await load()
-  if (!route.apiKeySet) return
-  const testNow = await ElMessageBox.confirm(app.t('modelConfig.testAfterSave'), app.t('modelConfig.testAfterSaveTitle'), {
-    confirmButtonText: app.t('modelConfig.testNow'),
+  if (route.apiKeySet) {
+    const testNow = await ElMessageBox.confirm(app.t('modelConfig.testAfterSave'), app.t('modelConfig.testAfterSaveTitle'), {
+      confirmButtonText: app.t('modelConfig.testNow'),
+      cancelButtonText: app.t('modelConfig.later'),
+      type: 'info',
+    }).then(() => true).catch(() => false)
+    if (testNow) await runTest(route)
+  }
+  if (!newModel) return
+  // A model without prices stays hidden from the image page, so point the admin at pricing right away.
+  const goPricing = await ElMessageBox.confirm(app.t('modelConfig.newModelPricing'), app.t('modelConfig.newModelPricingTitle'), {
+    confirmButtonText: app.t('modelConfig.goPricing'),
     cancelButtonText: app.t('modelConfig.later'),
     type: 'info',
   }).then(() => true).catch(() => false)
-  if (testNow) await runTest(route)
+  if (goPricing) await router.push({ name: 'admin-pricing' })
 }
 
 /** Central error handling for route writes. */
@@ -354,6 +389,7 @@ onMounted(() => {
 .lock-icon { color: var(--color-warning); }
 .stacked-cell { min-width: 0; display: grid; line-height: 1.4; }
 .stacked-cell .muted { font-size: 12px; }
+.stacked-cell .gif-model { font-size: 12px; color: var(--color-primary); }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) { .keyword-input, .status-filter { width: 100%; } .toolbar-actions { margin-left: 0; } }
 </style>

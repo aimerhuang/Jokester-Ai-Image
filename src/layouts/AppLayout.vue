@@ -150,6 +150,7 @@ const navItems = [
   { to: '/credits', label: 'nav.credits' },
   { to: '/pricing', label: 'nav.pricing' },
   { to: '/model-status', label: 'nav.modelStatus' },
+  { to: '/admin/pricing', label: 'adminPricing.title', superAdminOnly: true },
   { to: '/admin/models', label: 'nav.modelConfig', superAdminOnly: true },
   { to: '/admin/users', label: 'users.title', superAdminOnly: true },
   { to: '/admin/redeem-codes', label: 'nav.codeGenerator', superAdminOnly: true },
@@ -256,7 +257,8 @@ async function handleLogout() {
 
 <style scoped>
 .app-layout { min-height: 100vh; max-width: 100vw; overflow-x: hidden; display: grid; grid-template-columns: minmax(0, 240px) minmax(0, 1fr); gap: 24px; padding: 24px; background: radial-gradient(circle at top right, rgba(111,127,63,.12), transparent 34%), var(--color-bg); }
-.sidebar { position: sticky; top: 24px; min-width: 0; height: calc(100vh - 48px); padding: 20px; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 28px; }
+/* The sidebar grows with its content so every menu item stays visible; only the page itself scrolls. */
+.sidebar { align-self: start; min-width: 0; min-height: calc(100vh - 48px); padding: 20px; overflow: visible; display: flex; flex-direction: column; gap: 28px; }
 .primary-nav, .drawer-content { display: grid; gap: 8px; }
 .primary-nav { flex: 0 0 auto; }
 .primary-nav > a, .drawer-content > a { padding: 12px 14px; border-radius: var(--radius-md); color: var(--color-text-muted); font-weight: 600; }

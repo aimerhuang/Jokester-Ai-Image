@@ -1,4 +1,4 @@
-import type { ImageSizeMode } from '@/types/image'
+import type { ImageOutputFormat, ImageSizeMode } from '@/types/image'
 
 const STORAGE_KEY = 'pendingAiImageHistoryRecovery'
 const STORAGE_VERSION = 2
@@ -14,6 +14,9 @@ export interface ImageTaskHistoryRecovery {
   sizeContractVersion: string | null
   sizeMode: ImageSizeMode | null
   resolutionCode: string
+  outputFormat?: ImageOutputFormat
+  frameCount?: number
+  frameDurationMs?: number
   qualityCode: string
   aspectRatioCode: string
   referenceCount: number
@@ -30,6 +33,9 @@ export type ImageTaskHistoryRecoveryContext = Pick<
   | 'sizeContractVersion'
   | 'sizeMode'
   | 'resolutionCode'
+  | 'outputFormat'
+  | 'frameCount'
+  | 'frameDurationMs'
   | 'qualityCode'
   | 'aspectRatioCode'
   | 'referenceCount'
@@ -55,6 +61,9 @@ export function startImageTaskHistoryRecovery(
     sizeContractVersion: context.sizeContractVersion,
     sizeMode: context.sizeMode,
     resolutionCode: context.resolutionCode,
+    outputFormat: context.outputFormat,
+    frameCount: context.frameCount,
+    frameDurationMs: context.frameDurationMs,
     qualityCode: context.qualityCode,
     aspectRatioCode: context.aspectRatioCode,
     referenceCount: context.referenceCount,
@@ -89,6 +98,7 @@ export function readImageTaskHistoryRecovery(ownerUserId: number | null): ImageT
       || !(parsed.sizeContractVersion === undefined || parsed.sizeContractVersion === null || typeof parsed.sizeContractVersion === 'string')
       || !(parsed.sizeMode === undefined || parsed.sizeMode === null || parsed.sizeMode === 'explicit' || parsed.sizeMode === 'auto')
       || typeof parsed.resolutionCode !== 'string'
+      || (parsed.outputFormat === 'gif' && (!Number.isInteger(parsed.frameCount) || !Number.isInteger(parsed.frameDurationMs)))
       || typeof parsed.qualityCode !== 'string'
       || typeof parsed.aspectRatioCode !== 'string'
       || !Number.isInteger(parsed.referenceCount)
@@ -111,6 +121,9 @@ export function readImageTaskHistoryRecovery(ownerUserId: number | null): ImageT
       sizeContractVersion: typeof parsed.sizeContractVersion === 'string' ? parsed.sizeContractVersion : null,
       sizeMode: parsed.sizeMode === 'explicit' || parsed.sizeMode === 'auto' ? parsed.sizeMode : null,
       resolutionCode: parsed.resolutionCode,
+      outputFormat: parsed.outputFormat,
+      frameCount: parsed.frameCount,
+      frameDurationMs: parsed.frameDurationMs,
       qualityCode: parsed.qualityCode,
       aspectRatioCode: parsed.aspectRatioCode,
       referenceCount: Number(parsed.referenceCount),

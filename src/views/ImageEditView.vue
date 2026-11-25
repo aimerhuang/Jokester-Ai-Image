@@ -10,7 +10,7 @@
       <section class="visual-panel page-card">
         <div class="visual-toolbar">
           <div>
-            <h2>{{ app.t('imageDetail.previewTitle') }}</h2>
+            <h2>{{ app.t('imageDetail.previewTitle') }} <el-tag v-if="record?.outputFormat === 'gif'" size="small">GIF</el-tag></h2>
             <p>{{ app.t('imageDetail.previewDescription') }}</p>
           </div>
           <div class="visual-actions">
@@ -58,7 +58,17 @@
             <span>{{ app.t('imageDetail.outputSize') }}</span><strong>{{ outputSizeText }}</strong>
             <span>{{ app.t('playground.quality') }}</span><strong>{{ record?.qualityCode || '-' }}</strong>
             <span v-if="!isNewAutoTask">{{ app.t('playground.aspectRatio') }}</span><strong v-if="!isNewAutoTask">{{ record?.requestedAspectRatioCode || record?.aspectRatioCode || '-' }}</strong>
-            <span>{{ app.t('gallery.pointCost') }}</span><strong>{{ record?.pointCost ?? '-' }}</strong>
+            <template v-if="record?.outputFormat === 'gif'">
+              <span>{{ app.t('gif.frames') }}</span><strong>{{ record.frameCount }}</strong>
+              <span>{{ app.t('gif.duration') }}</span><strong>{{ record.frameDurationMs }} ms</strong>
+              <span>{{ app.t('gallery.pointCost') }}</span><strong>{{ record.chargedPoints ?? record.pointCost ?? '-' }}</strong>
+            </template>
+            <template v-else><span>{{ app.t('gallery.pointCost') }}</span><strong>{{ record?.pointCost ?? '-' }}</strong></template>
+            <template v-if="record?.pricingTier && record.outputFormat !== 'gif'">
+              <span>{{ app.t('vipPricing.tier') }}</span>
+              <VipPriceSummary v-if="record.pricingTier === 'vip'" :list="record.listUnitPointCost" :paid="record.unitPointCost" :count="record.imageCount || 1" />
+              <strong v-else>{{ app.t('vipPricing.standard') }}</strong>
+            </template>
             <span>{{ app.t('imageDetail.billingStatus') }}</span><strong>{{ billingStatusText }}</strong>
           </div>
         </section>
@@ -75,7 +85,7 @@
           <el-button type="primary" class="soft-button" :disabled="!canReuse" @click="reuseConfig">{{ app.t('imageDetail.editImage') }}</el-button>
           <el-button :disabled="!canReuse" @click="reuseConfig">{{ app.t('imageDetail.reuseConfig') }}</el-button>
           <el-button @click="usePrompt">{{ app.t('imageDetail.usePrompt') }}</el-button>
-          <el-button @click="useAsReference">{{ app.t('imageDetail.useAsReference') }}</el-button>
+          <el-button v-if="record?.outputFormat !== 'gif'" @click="useAsReference">{{ app.t('imageDetail.useAsReference') }}</el-button>
         </div>
       </aside>
     </template>
@@ -83,6 +93,7 @@
 </template>
 
 <script setup lang="ts">
+import VipPriceSummary from '@/components/pricing/VipPriceSummary.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -263,7 +274,7 @@ function hideBrokenThumbnail(event: Event) {
 }
 
 function downloadCurrent() {
-  downloadImage(sourceImageUrl.value, `image-${record.value?.id || globalThis.crypto?.randomUUID?.() || 'generated'}.png`)
+  downloadImage(sourceImageUrl.value, `image-${record.value?.id || globalThis.crypto?.randomUUID?.() || 'generated'}`)
 }
 
 async function toggleFavorite() {
@@ -307,6 +318,9 @@ function currentConfig() {
   const usesNewAuto = record.value.sizeContractVersion === 'size-mode-v1' && record.value.sizeMode === 'auto'
   return {
     prompt: prompt.value,
+    outputFormat: record.value.outputFormat,
+    frameCount: record.value.frameCount,
+    frameDurationMs: record.value.frameDurationMs,
     modelName: record.value.modelName,
     modelCode: record.value.modelCode,
     sizeContractVersion: record.value.sizeContractVersion,

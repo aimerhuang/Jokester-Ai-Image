@@ -52,11 +52,29 @@
       <rect x="2" y="5" width="20" height="14" rx="2" />
       <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 12.5h.01M10 12.5h.01M14 12.5h.01M18 12.5h.01M8 16h8" />
     </template>
+    <template v-else-if="name === 'sparkles'">
+      <path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.13-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.13a.5.5 0 0 1 .96 0L14.06 8.5A2 2 0 0 0 15.5 9.94l6.13 1.58a.5.5 0 0 1 0 .96L15.5 14.06a2 2 0 0 0-1.44 1.44l-1.58 6.13a.5.5 0 0 1-.96 0z" />
+      <path d="M20 3v4" />
+      <path d="M22 5h-4" />
+      <circle cx="4" cy="20" r="2" />
+    </template>
+    <template v-else-if="name === 'image-plus'">
+      <path d="M16 5h6" />
+      <path d="M19 2v6" />
+      <path d="M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5" />
+      <path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21" />
+      <circle cx="9" cy="9" r="2" />
+    </template>
+    <template v-else-if="name === 'pencil'">
+      <path d="M13 21h8" />
+      <path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z" />
+    </template>
   </svg>
 </template>
 
 <script setup lang="ts">
 export type CanvasToolbarIconName = 'undo' | 'redo' | 'text' | 'image' | 'upload' | 'palette' | 'grid' | 'trash' | 'eraser' | 'keyboard'
+  | 'sparkles' | 'image-plus' | 'pencil'
 
 defineProps<{ name: CanvasToolbarIconName }>()
 </script>

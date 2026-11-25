@@ -1,4 +1,4 @@
-import { http } from './http'
+import { http, noAuthRefreshReplayConfig, type SafeRequestConfig } from './http'
 import type { AxiosRequestConfig } from 'axios'
 import type { PageQuery, PageResult } from '@/types/api'
 import type {
@@ -30,12 +30,11 @@ export function getImageModels() {
 
 export function getPricingOptions(modelCode?: string, catalogVersion?: string) {
   const usesSizeModeV1 = Boolean(modelCode && catalogVersion)
-  return http.get<unknown, AiImagePointPrice[] | AiImagePricingEnvelope>('/ai/images/pricing-options', usesSizeModeV1
-    ? {
-        ...SIZE_MODE_CAPABILITY_CONFIG,
-        params: { modelCode, catalogVersion },
-      }
-    : undefined)
+  const config: SafeRequestConfig = { preservePricingRevision: true }
+  if (usesSizeModeV1) Object.assign(config, SIZE_MODE_CAPABILITY_CONFIG, { params: { modelCode, catalogVersion } })
+  return http.get<unknown, AiImagePointPrice[] | AiImagePricingEnvelope | { items: AiImagePointPrice[]; pricingRevision: number }>(
+    '/ai/images/pricing-options', config,
+  )
 }
 
 export function resolveImageParameters(payload: ResolveImageParametersRequest) {
@@ -54,7 +53,7 @@ export function createImageTask(payload: CreateImageTaskRequest) {
   return http.post<unknown, ImageTaskCreationResult>(
     '/ai/images',
     payload,
-    payload.sizeMode ? SIZE_MODE_CAPABILITY_CONFIG : undefined,
+    { ...noAuthRefreshReplayConfig, ...(payload.sizeMode ? SIZE_MODE_CAPABILITY_CONFIG : {}) },
   )
 }
 

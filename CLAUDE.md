@@ -42,7 +42,7 @@ VITE_DEFAULT_THEME=light
 
 ## 主要路由
 
-除独立全屏的 `/recharge` 外，受保护路由由 [src/layouts/AppLayout.vue](src/layouts/AppLayout.vue) 包裹；未登录会跳转 `/login`。`/admin/users`、`/admin/users/:id`、`/admin/models` 与 `/admin/redeem-codes` 还要求当前用户 `isSuperAdmin=true`（路由 `meta.requiresSuperAdmin` + 导航 `superAdminOnly`）。
+除独立全屏的 `/recharge` 外，受保护路由由 [src/layouts/AppLayout.vue](src/layouts/AppLayout.vue) 包裹；未登录会跳转 `/login`。`/admin/users`、`/admin/users/:id`、`/admin/models`、`/admin/pricing` 与 `/admin/redeem-codes` 还要求当前用户 `isSuperAdmin=true`（路由 `meta.requiresSuperAdmin` + 导航 `superAdminOnly`）。
 
 - `/canvas`（无限画布列表）
 - `/canvas/:canvasId`（无限画布编辑器，独立全屏，需登录）
@@ -58,6 +58,7 @@ VITE_DEFAULT_THEME=light
 - `/recharge`
 - `/admin/users`、`/admin/users/:id`（用户管理和积分详情，仅超级管理员）
 - `/admin/models`（模型配置，仅超级管理员）
+- `/admin/pricing`（生图定价、VIP 折扣与专属策略，仅超级管理员）
 - `/admin/redeem-codes`（仅超级管理员）
 - `/profile`
 
@@ -70,6 +71,8 @@ VITE_DEFAULT_THEME=light
 - 后端现役成功响应按 `{ code: 0, message, requestId, data }` 解包；兼容层仍接受 `code='success'` 和数值 2xx。失败响应使用字符串机器码并作为 `ApiError` 抛出。
 
 ## 生图实现要点
+
+- 首页 legacy 模型按 `capabilities.gif` 开放动图。仅 GIF 请求提交 `outputFormat=gif`、`frameCount`、`frameDurationMs`、显式比例及画质；省略分辨率。GIF 为固定价（公式参数取自 `capabilities.gif.reserve`），提交前重新拉取能力，价格上涨要求再次确认；不向用户展示 Token 用量。图集及详情以 `chargedPoints ?? pointCost` 展示任务积分，下载通过鉴权获取原始 Blob 并按 MIME 决定扩展名。
 
 - 参数与模型：`GET /api/ai/images/parameters` + `GET /api/ai/images/models`，实现位于 [src/stores/imageOptions.ts](src/stores/imageOptions.ts)。
 - 参考图上传：`POST /api/ai/images/upload`，控件位于 [src/components/images/ReferenceUploader.vue](src/components/images/ReferenceUploader.vue)，支持点击、拖拽、粘贴；限制 WEBP/JPG/PNG、最多 6 张、单张最大 10MB。新上传图片保留响应中的 `assetId`，创建任务优先提交 `referenceAssetIds`；只有历史/复用图片继续走 `referenceImageUrls` 兼容字段。

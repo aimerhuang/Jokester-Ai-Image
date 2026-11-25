@@ -33,7 +33,7 @@
       <h2 id="recharge-plans-title" class="sr-only">{{ app.t('recharge.heading') }}</h2>
       <article
         v-for="plan in plans"
-        :key="plan.code"
+        :key="plan.code" :id="plan.code"
         class="plan-card"
         :class="[`plan-card--${plan.code}`, { 'plan-card--featured': plan.isFeatured }]"
       >
@@ -177,10 +177,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowRight, CircleCheckFilled, Close, Coin, Ticket, User } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import MonthlyVipBadge from '@/components/common/MonthlyVipBadge.vue'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -211,6 +211,7 @@ const app = useAppStore()
 const auth = useAuthStore()
 const credits = useCreditsStore()
 const router = useRouter()
+const route = useRoute()
 const redeemVisible = ref(false)
 const orderVisible = ref(false)
 const redeemResultVisible = ref(false)
@@ -242,6 +243,14 @@ const plans = computed<RechargePlanView[]>(() => credits.rechargePackages
       : '',
   }
 }))
+
+watch(() => [route.query.package === 'monthly' || route.hash === '#monthly', plans.value.some((plan) => plan.code === 'monthly')] as const,
+  async ([requested, available]) => {
+    if (requested && available) {
+      await nextTick()
+      document.getElementById('monthly')?.scrollIntoView({ block: 'center' })
+    }
+  }, { immediate: true })
 
 onMounted(() => {
   void Promise.allSettled([
@@ -302,6 +311,7 @@ async function redeemCode() {
   if (!value || credits.redeeming || redeemOutcomeUnknown.value || redeemRetrySeconds.value > 0) return
   try {
     const result = await credits.redeemPointCode(value)
+    window.dispatchEvent(new Event('vip:changed'))
     redeemResult.value = result
     code.value = ''
     redeemVisible.value = false
