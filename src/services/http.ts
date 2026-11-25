@@ -18,6 +18,8 @@ type RetryableRequestConfig = InternalAxiosRequestConfig & {
 }
 export type SafeRequestConfig = AxiosRequestConfig & { skipAuthRefreshReplay?: boolean; preservePricingRevision?: boolean }
 export const noAuthRefreshReplayConfig: SafeRequestConfig = { skipAuthRefreshReplay: true }
+/** The session was renewed after a 401, but the write was not re-sent; the caller should ask the user to retry. */
+export const AUTH_REFRESHED_NOT_REPLAYED = 'AUTH_REFRESHED_NOT_REPLAYED'
 type ApiPayloadShape = Record<string, unknown> & {
   code?: unknown
   message?: unknown
@@ -185,7 +187,9 @@ http.interceptors.response.use(
       originalRequest._retry = true
       try {
         const token = await refreshAccessToken()
-        if (originalRequest.skipAuthRefreshReplay) return Promise.reject(toApiError(error))
+        if (originalRequest.skipAuthRefreshReplay) {
+          return Promise.reject({ ...toApiError(error), code: AUTH_REFRESHED_NOT_REPLAYED } satisfies ApiError)
+        }
         originalRequest.headers.Authorization = `Bearer ${token}`
         if (originalRequest.url?.includes('/auth/logout')) {
           originalRequest.headers['X-Refresh-Token'] = getStoredRefreshToken() || ''

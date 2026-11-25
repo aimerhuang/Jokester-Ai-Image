@@ -13,6 +13,8 @@ type MockState = {
   testRequests: number[]
   createRequests: Array<Record<string, unknown>>
   conflictNextUpdate: boolean
+  expireNextUpdate: boolean
+  refreshRequests: number
 }
 
 function statusItems() {
@@ -105,9 +107,12 @@ async function mockBackend(page: Page, options: { isSuperAdmin: boolean }): Prom
     testRequests: [],
     createRequests: [],
     conflictNextUpdate: false,
+    expireNextUpdate: false,
+    refreshRequests: 0,
   }
   await page.addInitScript(() => {
     localStorage.setItem('accessToken', 'model-status-e2e-token')
+    localStorage.setItem('refreshToken', 'model-status-e2e-refresh')
     localStorage.setItem('locale', 'zh-CN')
   })
 
@@ -127,6 +132,10 @@ async function mockBackend(page: Page, options: { isSuperAdmin: boolean }): Prom
       body: JSON.stringify({ code, message, requestId: 'e2e', details }),
     })
 
+    if (path === '/api/auth/refresh' && method === 'POST') {
+      state.refreshRequests += 1
+      return success({ accessToken: `renewed-token-${state.refreshRequests}`, refreshToken: `renewed-refresh-${state.refreshRequests}` })
+    }
     if (path === '/api/auth/profile') {
       return success({ id: 1, userName: 'admin', nickName: 'Admin', pointBalance: 100, isSuperAdmin: state.isSuperAdmin })
     }
@@ -184,6 +193,10 @@ async function mockBackend(page: Page, options: { isSuperAdmin: boolean }): Prom
     if (updateMatch && method === 'PUT') {
       const payload = request.postDataJSON() as Record<string, unknown>
       state.updateRequests.push(payload)
+      if (state.expireNextUpdate) {
+        state.expireNextUpdate = false
+        return failure(401, 'ACCESS_TOKEN_EXPIRED', 'Access token has expired.')
+      }
       if (state.conflictNextUpdate) {
         state.conflictNextUpdate = false
         return failure(409, 'MODEL_ROUTE_REVISION_CONFLICT', 'conflict')
@@ -372,5 +385,34 @@ test.describe('model config: new model', () => {
     await messageBox(page, '是否立即测试连接？').getByRole('button', { name: '稍后' }).click()
     await expect(page.getByTestId('route-gif-12')).toHaveCount(0)
     await expect(page.getByTestId('model-gif-tag')).toHaveCount(0)
+  })
+
+  test('an expired session on save is renewed without re-sending, and the user is asked to save again', async ({ page }) => {
+    const state = await mockBackend(page, { isSuperAdmin: true })
+    await page.goto(`${baseUrl}/admin/models`, { waitUntil: 'networkidle' })
+    state.expireNextUpdate = true
+
+    await page.getByTestId('route-edit-12').click()
+    const form = page.getByTestId('model-route-form')
+    await form.getByTestId('route-gif-provider-model').fill('gpt-image-2-native')
+    await page.getByTestId('route-save').click()
+    await messageBox(page, '确认保存').getByRole('button', { name: '确认' }).click()
+
+    // The session is renewed, but the write is not replayed behind the user's back.
+    await expect(page.locator('.el-message--warning')).toContainText('登录已自动续期，本次操作未提交，请再操作一次。')
+    await expect(page.getByText('Access token has expired.')).toHaveCount(0)
+    expect(state.refreshRequests).toBe(1)
+    expect(state.updateRequests).toHaveLength(1)
+    await expect(form).toBeVisible()
+    await expect(form.getByTestId('route-gif-provider-model')).toHaveValue('gpt-image-2-native')
+
+    // Saving again goes through with the renewed token.
+    const retried = page.waitForRequest((request) => request.method() === 'PUT' && request.url().endsWith('/api/ai/model-routes/12'))
+    await page.getByTestId('route-save').click()
+    await messageBox(page, '确认保存').getByRole('button', { name: '确认' }).click()
+    expect((await retried).headers().authorization).toBe('Bearer renewed-token-1')
+    await expect.poll(() => state.updateRequests.length).toBe(2)
+    await messageBox(page, '是否立即测试连接？').getByRole('button', { name: '稍后' }).click()
+    await expect(page.getByTestId('route-gif-12')).toHaveText('GIF · gpt-image-2-native')
   })
 })

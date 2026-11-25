@@ -932,6 +932,7 @@ export default {
     testPassed: 'Connection passed (HTTP {status}, {ms} ms)',
     testAuthFailed: 'Authentication failed (HTTP {status}). Check the API key.',
     testUnreachable: 'Unreachable or probing unsupported{status}. Some relays do not implement the model list endpoint.',
+    sessionRenewedRetry: 'Your session was renewed and this change was not submitted. Please try again.',
     revisionConflict: 'Someone else changed this route. The list has been reloaded; please try again.',
     lockedByRelease: 'A published size-mode catalog freezes this route. Publish a new version with --configure-ai-image-catalog before changing its endpoint, paths, provider model or disabling it.',
     offlineConfirmTitle: 'Take offline',

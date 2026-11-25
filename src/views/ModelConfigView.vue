@@ -141,6 +141,7 @@ import ModelRouteFormDialog from '@/components/models/ModelRouteFormDialog.vue'
 import ModelStatusBadge from '@/components/models/ModelStatusBadge.vue'
 import { getImageParameters } from '@/services/aiImages'
 import { getModelRoutes, testModelRoute, updateModelRouteStatus } from '@/services/models'
+import { AUTH_REFRESHED_NOT_REPLAYED } from '@/services/http'
 import { useAppStore } from '@/stores/app'
 import { sortImageResolutionCodes } from '@/stores/imageOptions'
 import type { ApiError } from '@/types/api'
@@ -271,6 +272,10 @@ async function handleSaved(route: ModelRoute, created: boolean) {
 
 /** Central error handling for route writes. */
 async function handleError(error: ApiError) {
+  if (error.code === AUTH_REFRESHED_NOT_REPLAYED) {
+    ElMessage.warning({ message: app.t('modelConfig.sessionRenewedRetry'), duration: 6000 })
+    return
+  }
   if (error.code === 'MODEL_ROUTE_REVISION_CONFLICT') {
     ElMessage.warning(app.t('modelConfig.revisionConflict'))
     formVisible.value = false
