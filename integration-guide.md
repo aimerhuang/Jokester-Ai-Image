@@ -286,6 +286,16 @@ Authorization: Bearer <accessToken>
 
 ## AI 生图
 
+### 首页 GIF 动图
+
+Web 通过模型列表中 `capabilities.gif` 发现动图能力。用户从默认 PNG 切换为 GIF 后，可选显式比例、Low / Med / High、生成数量、帧数与每帧时长。帧数和时长的选项、默认值与价格公式参数均使用服务端下发值。对于 `size-mode-v1` 模型，首页使用已有发布版尺寸协议，GIF 入口仅供具备此能力的 legacy 模型使用。
+
+创建沿用 `POST /api/ai/images`。GIF 请求增加 `outputFormat: "gif"`、`frameCount`、`frameDurationMs` 并传 `qualityCode`、`aspectRatioCode`。单帧尺寸由比例决定，请求省略 `resolutionCode`、`sizeMode` 和 `catalogVersion`。参考图与 `idempotencyKey` 沿用原接口。格式、帧数和时长加入本地提交指纹、会话草稿以及未知任务的历史恢复匹配。
+
+GIF 按固定价收费：每个等于 `basePoints + perFramePoints[qualityCode] × frameCount + perReferencePoints × referenceCount`，`expectedUnitPoints` 为单个价格，「本次预计消耗」显示整批总额；成功不退差，失败全退。「计费规则」弹窗展示公式、每帧单价与画质×帧数价格表，不展示 Token 用量。用户在提交前价格上涨时重新确认。作品与详情以 `chargedPoints ?? pointCost` 显示「任务积分」。动图通过 `/api/media/ai/` 获取鉴权 Blob 直接播放、下载。定向回归见 `gif-playground.e2e.spec.ts`。
+
+### 接口与参数
+
 统一创建生成记录 / 后台任务：
 
 ```http
@@ -341,6 +351,11 @@ X-Client-Build: <build-id>
 GPT explicit 分辨率 UI 固定按 `1K、2K、4K` 排列；前端会先规范化模型和参数目录的顺序，再与当前 catalog 的 explicit 价格取交集。后端返回乱序、缺档或多余编码时不得把 `2K` 挪出中间，也不得凭本地 fallback 扩大模型能力。
 
 新协议按刚读取的 `(modelCode, catalogVersion)` 请求 `GET /api/ai/images/pricing-options?modelCode=...&catalogVersion=...`，响应 envelope 必须回显同一模型和 catalog。explicit 价格按 `sizeMode + resolutionCode + qualityCode` 匹配，auto 价格按 `sizeMode + qualityCode` 匹配；版本不一致、模式无价格或当前画质无价格时禁止生成。legacy Nano/Gemini 继续读取旧扁平数组并按业务分辨率计价。单张积分乘 `imageCount` 后与 `/api/points/balance` 比较，最终扣分仍以后端创建事务为准。
+
+生图和画布使用 `effectivePoints` 估价，旧响应缺少该字段时沿用 `points`。legacy 定价响应的 `pricingRevision` 位于外层，size-mode 响应的版本位于 `data` 中。取得新版本时重新拉取模型和价格。提交携带当次确认的 `expectedUnitPoints`，升价或 `PRICE_CHANGED` 会显示新价并等待用户再次点击。任务的实际折扣和节省积分使用创建时的 `listUnitPointCost`、`unitPointCost` 快照。
+
+专属模型的购买引导确认后进入 `/recharge?package=monthly#monthly`。成功跳转后使用登录凭据发送 `POST /api/ai/model-pricing-events/vip-guide/{modelCode}`，统计失败时仍可购买。普通余额不足的充值入口沿用 `/recharge`。
+
 
 `size-mode-v1` 显式尺寸请求体：
 
@@ -420,11 +435,18 @@ GPT explicit 分辨率 UI 固定按 `1K、2K、4K` 排列；前端会先规范�
 
 `GET /api/ai/images/model-status` 只要求登录。返回 `generatedAt`、`windowHours`、`sampleLimit` 和 `items[]`；每项包含 `modelCode`、`modelName`、`state`（`normal`/`degraded`/`down`/`unknown`）、`availability`（`unknown` 时为 `null`）、`sampleCount`、`fastestSuccessSeconds`、`slowestSuccessSeconds`、`recent`（从旧到新，`1` 成功、`0` 失败）、`recentCompletedAt`（UTC，与 `recent` 等长）和 `lastSampleAt`。前端按 `state` 映射文案，不展示任何接口地址或错误详情。
 
+### 生图定价（超级管理员）
+
+`/admin/pricing` 读取 `GET /api/ai/model-pricing`。已有价格档按行携带 `revision`，通过 `PUT /api/ai/model-pricing/prices/batch` 一次保存。全局或模型折扣先调用 `POST /api/ai/model-pricing/discount/preview`，确认时回传原 `previewToken`。所有变更都要求填写原因，后台通过 `/audits` 查询批次及旧值、新值。所有写请求使用 `noAuthRefreshReplayConfig`。
+
+后台提示 `PRICE_REVISION_CONFLICT` 时重新读取最新价格。停用最后一个启用价格档或超出大幅调价阈值时，页面保留编辑内容，待管理员勾选对应确认项后再次提交。
+
 ### 模型配置（超级管理员）
 
 - `GET /api/ai/model-routes`：按模型分组 `[{ modelCode, modelName, state, missingPrimaryRoute, routes[] }]`。
-- `POST /api/ai/model-routes`：新增路由（`apiKey` 必填）。
-- `PUT /api/ai/model-routes/{id}`：编辑路由，必须携带 `revision`；`apiKey` 留空表示不修改。
+- `POST /api/ai/model-routes`：新增路由（`apiKey` 必填，`gifProviderModel` 可选）。
+- `PUT /api/ai/model-routes/{id}`：编辑路由，必须携带 `revision`；`apiKey` 留空表示不修改；`gifProviderModel` 省略表示不修改，空字符串表示关闭该路由的 GIF。表单始终提交该字段（Gemini 路由除外）。
+- 路由带 `gifProviderModel` 时，表格在供应商模型下显示「GIF · 型号」；模型有启用、有 Key 的 GIF 路由时标题显示「支持 GIF」，与首页 `capabilities.gif` 判定一致。
 - `PUT /api/ai/model-routes/{id}/status`：`{ revision, status, confirmOffline? }`。
 - `POST /api/ai/model-routes/{id}/test`：`{ result: passed | auth_failed | unreachable, httpStatus, elapsedMilliseconds }`。
 - `GET /api/ai/model-routes/audits?configId=&page=&pageSize=`：变更记录。

@@ -42,6 +42,7 @@ const router = createRouter({
         { path: 'pricing', name: 'pricing', component: () => import('@/views/PricingView.vue'), meta: { titleKey: 'pricing.title', subtitleKey: 'pricing.subtitle' } },
         { path: 'model-status', name: 'model-status', component: () => import('@/views/ModelStatusView.vue'), meta: { titleKey: 'modelStatus.title', subtitleKey: 'modelStatus.subtitle' } },
         { path: 'admin/models', name: 'model-config', component: () => import('@/views/ModelConfigView.vue'), meta: { titleKey: 'modelConfig.title', subtitleKey: 'modelConfig.subtitle', requiresSuperAdmin: true } },
+        { path: 'admin/pricing', name: 'admin-pricing', component: () => import('@/views/AdminPricingView.vue'), meta: { titleKey: 'adminPricing.title', requiresSuperAdmin: true } },
         { path: 'admin/users', name: 'admin-users', component: () => import('@/views/UserAdminView.vue'), meta: { titleKey: 'users.title', requiresSuperAdmin: true } },
         { path: 'admin/users/:id', name: 'admin-user', component: () => import('@/views/UserAdminDetailView.vue'), meta: { titleKey: 'users.detailTitle', requiresSuperAdmin: true } },
         { path: 'admin/redeem-codes', name: 'redeem-code-generator', component: () => import('@/views/RedeemCodeGeneratorView.vue'), meta: { titleKey: 'codeGenerator.title', subtitleKey: 'codeGenerator.subtitle', requiresSuperAdmin: true } },
@@ -79,6 +80,23 @@ router.beforeEach(async (to) => {
   if (to.meta.requiresSuperAdmin && !auth.user?.isSuperAdmin) return { name: 'playground' }
   if ((to.name === 'login' || to.name === 'register') && auth.isAuthenticated) return { name: 'playground' }
   return true
+})
+
+// After a redeploy, a tab still running the previous bundle requests hashed chunks that no longer
+// exist (404), and the navigation is silently aborted. Reload once into the target route so the
+// browser fetches the current index.html; the sessionStorage guard prevents a reload loop.
+const CHUNK_RELOAD_KEY = 'chunk-reload-target'
+const CHUNK_ERROR_PATTERN = /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|Unable to preload CSS/i
+
+router.onError((error, to) => {
+  if (!CHUNK_ERROR_PATTERN.test(String((error as Error)?.message ?? error))) return
+  if (sessionStorage.getItem(CHUNK_RELOAD_KEY) === to.fullPath) return
+  sessionStorage.setItem(CHUNK_RELOAD_KEY, to.fullPath)
+  window.location.assign(to.fullPath)
+})
+
+router.afterEach((_to, _from, failure) => {
+  if (!failure) sessionStorage.removeItem(CHUNK_RELOAD_KEY)
 })
 
 window.addEventListener('auth:expired', (event) => {

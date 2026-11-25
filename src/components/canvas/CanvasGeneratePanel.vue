@@ -36,17 +36,18 @@
       <el-button v-if="notice.action" link type="primary" @click="notice.action.run">{{ notice.action.label }}</el-button>
     </div>
 
+    <VipPriceSummary v-if="options.selectedPrice.value?.pricingTier === 'vip'" :list="options.selectedPrice.value.points" :paid="options.selectedPrice.value.effectivePoints" :count="options.imageCount.value" />
     <div class="panel-footer">
-      <el-select
+      <ModelPicker
         class="model-select"
+        compact
         :model-value="node.data.modelCode || ''"
+        :models="options.models.value"
         :placeholder="app.t('canvas.noModel')"
         :teleported="false"
         @update:model-value="updateParams({ modelCode: $event })"
-      >
-        <template #prefix><el-icon><MagicStick /></el-icon></template>
-        <el-option v-for="model in options.models.value" :key="model.value" :label="model.name || model.label" :value="model.value" />
-      </el-select>
+        @locked="emit('vipGuide', $event)"
+      />
 
       <!-- A plain in-panel popover: no popper positioning, transitions or focus trap on every click. -->
       <div ref="settingsWrap" class="settings-wrap">
@@ -115,8 +116,14 @@
 </template>
 
 <script setup lang="ts">
+import VipPriceSummary from '@/components/pricing/VipPriceSummary.vue'
+import ModelPicker from '@/components/images/ModelPicker.vue'
+import { ElMessage } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
+import { getStoredToken } from '@/services/http'
+import { useImageOptionsStore } from '@/stores/imageOptions'
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { Fold, FullScreen, MagicStick, Operation, PictureFilled } from '@element-plus/icons-vue'
+import { Fold, FullScreen, Operation, PictureFilled } from '@element-plus/icons-vue'
 import CanvasAuthImage from './CanvasAuthImage.vue'
 import CanvasPromptEditor from './CanvasPromptEditor.vue'
 import { useCanvasGenerationOptions } from '@/composables/useCanvasGenerationOptions'
@@ -140,23 +147,28 @@ const emit = defineEmits<{
   remember: []
   generate: [request: Omit<CreateImageTaskRequest, 'idempotencyKey'>]
   reference: []
+  vipGuide: [modelCode: string]
   recharge: []
   retryOptions: []
 }>()
 
 const app = useAppStore()
+const auth = useAuthStore()
+let mounted = true
 const options = useCanvasGenerationOptions(() => props.node.data)
 const maxInputs = MAX_GENERATE_INPUTS
 const expanded = ref(false)
 const settingsOpen = ref(false)
 const settingsWrap = ref<HTMLElement | null>(null)
 
+const checkingPrice = ref(false)
+const optionStore = useImageOptionsStore()
 const busy = computed(() => props.runtime?.status === 'submitting' || props.runtime?.status === 'running')
 const inputsReady = computed(() => props.inputs.every((input) => Boolean(input.assetId)))
 const insufficientPoints = computed(() => props.balance !== null
   && options.estimatedPoints.value !== null
   && options.estimatedPoints.value > props.balance)
-const canGenerate = computed(() => !busy.value
+const canGenerate = computed(() => !checkingPrice.value && options.selectedModel.value?.access?.available !== false && !busy.value
   && props.optionsReady
   && Boolean(props.node.data.prompt?.trim())
   && options.parametersValid.value
@@ -164,8 +176,10 @@ const canGenerate = computed(() => !busy.value
   && inputsReady.value
   && !insufficientPoints.value)
 const notice = computed<{ text: string; action?: { label: string; run: () => void } } | null>(() => {
+  if (options.selectedModel.value?.access?.available === false) return { text: app.t('vipPricing.locked'), action: { label: app.t('vipPricing.buy'), run: () => emit('vipGuide', props.node.data.modelCode!) } }
+  if (options.selectedModel.value?.access?.basis === 'super_admin') return { text: app.t('vipPricing.admin') }
   if (!props.optionsReady) return { text: app.t('playground.optionsUnavailable'), action: { label: app.t('common.retry'), run: () => emit('retryOptions') } }
-  if (options.pricingFailed.value) return { text: app.t('playground.pricingUnavailable'), action: { label: app.t('common.retry'), run: () => void options.ensurePricing(true) } }
+  if (options.pricingFailed.value) return { text: app.t('playground.pricingUnavailable'), action: { label: app.t('common.retry'), run: () => void options.ensurePricing() } }
   if (options.pricingReady.value && options.parametersValid.value && options.estimatedPoints.value === null) {
     return { text: app.t('playground.pricingUnavailable') }
   }
@@ -174,7 +188,8 @@ const notice = computed<{ text: string; action?: { label: string; run: () => voi
   return null
 })
 
-watch(() => options.selectedModel.value?.value, () => void options.ensurePricing(), { immediate: true })
+defineExpose({ refreshPricing: options.ensurePricing })
+watch(options.modelKey, () => void options.ensurePricing(), { immediate: true })
 // Only the generation parameters can invalidate each other; prompt keystrokes and run history must not re-run reconcile.
 watch(
   () => {
@@ -199,7 +214,10 @@ watch(settingsOpen, (open) => {
     removeSettingsListeners()
   }
 })
-onBeforeUnmount(removeSettingsListeners)
+onBeforeUnmount(() => {
+  mounted = false
+  removeSettingsListeners()
+})
 
 function removeSettingsListeners() {
   document.removeEventListener('pointerdown', handleOutsidePointer, true)
@@ -219,12 +237,43 @@ async function updateParams(patch: Partial<CanvasGenerateNodeData>) {
   emit('update', patch)
   await nextTick()
   emit('remember')
+  if (patch.modelCode && options.selectedModel.value?.access?.available === false) emit('vipGuide', patch.modelCode)
 }
 
-function submit() {
-  if (!canGenerate.value) return
-  const request = options.buildRequest(props.node.data.prompt!.trim(), props.inputs.map((input) => input.assetId))
-  if (request) emit('generate', request)
+async function submit() {
+  if (!canGenerate.value || !options.selectedPrice.value) return
+  const build = () => options.buildRequest(props.node.data.prompt?.trim() || '', props.inputs.map(input => input.assetId))
+  const original = build()
+  if (!original || original.expectedUnitPoints == null) return
+  const { expectedUnitPoints: seen, ...intent } = original
+  const userId = auth.user?.id
+  const token = auth.token
+  const nodeId = props.node.id
+  checkingPrice.value = true
+  try {
+    await optionStore.fetchOptions()
+    await options.ensurePricing()
+    await nextTick()
+    if (!mounted) return
+    if (!userId || userId !== auth.user?.id || token !== auth.token || token !== getStoredToken() || props.node.id !== nodeId) {
+      ElMessage.warning(app.t('vipPricing.selectionChanged'))
+      return
+    }
+    if (options.selectedModel.value?.value === original.modelCode && options.selectedModel.value.access?.available === false) {
+      emit('vipGuide', original.modelCode)
+      return
+    }
+    const request = build()
+    if (!request || request.expectedUnitPoints == null) {
+      ElMessage.warning(app.t(options.pricingFailed.value ? 'playground.pricingUnavailable' : 'vipPricing.selectionChanged'))
+      return
+    }
+    const { expectedUnitPoints, ...freshIntent } = request
+    if (JSON.stringify(intent) !== JSON.stringify(freshIntent)) ElMessage.warning(app.t('vipPricing.selectionChanged'))
+    else if (expectedUnitPoints > seen) ElMessage.warning(app.t('vipPricing.changed').replace('{price}', String(expectedUnitPoints)))
+    else emit('generate', request)
+  } catch { ElMessage.warning(app.t('playground.pricingUnavailable')) }
+  finally { checkingPrice.value = false }
 }
 
 function shortQuality(code: string) {
@@ -347,8 +396,8 @@ function aspectShape(code: string) {
   flex: 1;
 }
 
-.model-select {
-  width: 170px;
+.panel-footer .model-select {
+  width: 190px;
 }
 
 .count-select {

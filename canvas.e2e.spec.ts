@@ -414,3 +414,70 @@ test('@ references render as tags and one backspace removes the whole tag', asyn
   await expect(prompt.locator('.prompt-chip')).toHaveCount(0)
   await expect.poll(() => savedNodes(state).find((node) => node.id === 'gen_1')?.data.prompt).toBe('参考')
 })
+
+test('canvas requires another click on local and transactional price increases', async ({ page }) => {
+  await mockBackend(page, { document: connectedDocument() })
+  let unit = 20
+  const posts: number[] = []
+  await page.route('**/api/ai/images/pricing-options', route => route.fulfill({ json: { code: 0, data: [
+    { modelCode: 'gpt-image-2', resolutionCode: '2k', qualityCode: 'low', points: 40, effectivePoints: unit, pricingTier: 'vip' },
+  ] } }))
+  await page.route('**/api/ai/images', route => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    posts.push(route.request().postDataJSON().expectedUnitPoints)
+    unit = 30
+    return route.fulfill({ status: 409, json: { code: 'PRICE_CHANGED', details: { effectivePoints: unit } } })
+  })
+  await page.goto(`/canvas/${canvasId}`)
+  await page.locator('[data-node-id="gen_1"]').click()
+  await page.getByPlaceholder('描述你想要生成的画面内容，@引用素材').fill('snow')
+  await expect(page.locator('.generate-panel')).toContainText(/原价 40.*5 折.*节省积分 20/)
+  unit = 25
+  await page.locator('.generate-button').click()
+  await expect(page.getByText(/单图价格已更新为 25/)).toBeVisible()
+  expect(posts).toEqual([])
+  await page.locator('.generate-button').click()
+  await expect(page.locator('.el-message').filter({ hasText: '单图价格已更新为 30' })).toBeVisible()
+  await expect(page.locator('.generate-button')).toContainText('30')
+  expect(posts).toEqual([25])
+})
+
+test('canvas VIP_REQUIRED opens the monthly package and records the chosen model only on confirmation', async ({ page }) => {
+  await mockBackend(page, { document: connectedDocument() })
+  const events: string[] = []
+  await page.route('**/api/ai/model-pricing-events/vip-guide/*', route => {
+    events.push(`${route.request().method()} ${new URL(route.request().url()).pathname} ${route.request().headers().authorization}`)
+    return route.fulfill({ status: 500, json: { code: 500 } })
+  })
+  await page.route('**/api/ai/images', route => route.request().method() === 'POST'
+    ? route.fulfill({ status: 403, json: { code: 'VIP_REQUIRED' } }) : route.fallback())
+  await page.goto(`/canvas/${canvasId}`)
+  await page.locator('[data-node-id="gen_1"]').click()
+  await page.getByPlaceholder('描述你想要生成的画面内容，@引用素材').fill('snow')
+  await page.locator('.generate-button').click()
+  const box = page.locator('.el-message-box')
+  await expect(box).toBeVisible()
+  await box.getByRole('button', { name: '取消' }).click()
+  expect(events).toEqual([])
+  await page.locator('.generate-button').click()
+  await box.getByRole('button', { name: '开通月卡' }).click()
+  await expect(page).toHaveURL(/recharge\?package=monthly#monthly/)
+  await expect.poll(() => events).toEqual([`POST /api/ai/model-pricing-events/vip-guide/gpt-image-2 Bearer ${accessToken}`])
+})
+
+test('canvas stops when the selected resolution disappears during quote refresh', async ({ page }) => {
+  const state = await mockBackend(page, { document: connectedDocument() })
+  await page.goto(`/canvas/${canvasId}`)
+  await page.locator('[data-node-id="gen_1"]').click()
+  await page.getByPlaceholder('描述你想要生成的画面内容，@引用素材').fill('snow')
+  await expect(page.locator('.generate-button')).toContainText('20')
+  await page.route('**/api/ai/images/pricing-options', route => route.fulfill({ json: { code: 0, data: [
+    { modelCode: 'gpt-image-2', resolutionCode: '1k', qualityCode: 'low', points: 10 },
+  ] } }))
+  await page.locator('.generate-button').click()
+  await expect(page.getByText(/生成参数或登录身份已变化/)).toBeVisible()
+  expect(state.createRequests).toEqual([])
+  await expect(page.locator('.generate-button')).toContainText('10')
+  await page.locator('.generate-button').click()
+  await expect.poll(() => state.createRequests.map(request => request.resolutionCode)).toEqual(['1k'])
+})

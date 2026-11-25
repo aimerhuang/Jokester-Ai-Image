@@ -13,9 +13,10 @@ type ApiCode = ApiSuccessResponse<unknown>['code'] | ApiFailureResponse['code'] 
 type RetryableRequestConfig = InternalAxiosRequestConfig & {
   _retry?: boolean
   _accessToken?: string
+  preservePricingRevision?: boolean
   skipAuthRefreshReplay?: boolean
 }
-export type SafeRequestConfig = AxiosRequestConfig & { skipAuthRefreshReplay?: boolean }
+export type SafeRequestConfig = AxiosRequestConfig & { skipAuthRefreshReplay?: boolean; preservePricingRevision?: boolean }
 export const noAuthRefreshReplayConfig: SafeRequestConfig = { skipAuthRefreshReplay: true }
 type ApiPayloadShape = Record<string, unknown> & {
   code?: unknown
@@ -151,7 +152,13 @@ http.interceptors.response.use(
   (response) => {
     const payload = response.data as unknown
     if (isApiPayload(payload) && 'code' in payload) {
-      if (isSuccessCode(payload.code)) return 'data' in payload ? payload.data : null
+      if (isSuccessCode(payload.code)) {
+        if ((response.config as RetryableRequestConfig).preservePricingRevision && Array.isArray(payload.data)
+          && typeof payload.pricingRevision === 'number') {
+          return { items: payload.data, pricingRevision: payload.pricingRevision }
+        }
+        return 'data' in payload ? payload.data : null
+      }
       const details = payload.details
       return Promise.reject({
         code: normalizeCode(payload.code, response.status),

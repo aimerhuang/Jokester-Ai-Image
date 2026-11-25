@@ -1,9 +1,47 @@
 <template>
   <div class="canvas-editor" :class="`bg-${doc.background}`">
     <header class="editor-header">
-      <button class="header-back" type="button" :aria-label="app.t('canvas.back')" @click="goBack">
-        <el-icon><ArrowLeft /></el-icon>
-      </button>
+      <el-dropdown
+        trigger="click"
+        placement="bottom-start"
+        popper-class="canvas-brand-menu"
+        @command="handleBrandCommand"
+        @visible-change="brandMenuOpen = $event"
+      >
+        <button
+          class="brand-trigger"
+          type="button"
+          :class="{ active: brandMenuOpen }"
+          :aria-label="app.t('canvas.menu.label')"
+          data-testid="canvas-brand-menu"
+        >
+          <img class="brand-logo" src="/logo.png" alt="jo" />
+          <el-icon class="brand-arrow"><ArrowUp v-if="brandMenuOpen" /><ArrowDown v-else /></el-icon>
+        </button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="home" :icon="House" data-testid="canvas-menu-home">{{ app.t('canvas.menu.home') }}</el-dropdown-item>
+            <el-dropdown-item command="create" :icon="Plus" divided :disabled="menuBusy" data-testid="canvas-menu-create">
+              {{ app.t('canvas.menu.create') }}
+            </el-dropdown-item>
+            <el-dropdown-item
+              command="delete"
+              :icon="Delete"
+              class="is-danger"
+              :disabled="menuBusy || loading || Boolean(loadError)"
+              data-testid="canvas-menu-delete"
+            >
+              {{ app.t('canvas.menu.delete') }}
+            </el-dropdown-item>
+            <el-dropdown-item command="undo" :icon="RefreshLeft" divided :disabled="!history.canUndo.value" data-testid="canvas-menu-undo">
+              {{ app.t('canvas.tools.undo') }}
+            </el-dropdown-item>
+            <el-dropdown-item command="redo" :icon="RefreshRight" :disabled="!history.canRedo.value" data-testid="canvas-menu-redo">
+              {{ app.t('canvas.tools.redo') }}
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
       <input
         v-model="titleDraft"
         class="title-input"
@@ -93,6 +131,7 @@
 
       <div v-if="activeGenerateNode" class="panel-anchor" :style="panelStyle">
         <CanvasGeneratePanel
+          ref="generatePanel"
           :node="activeGenerateNode"
           :inputs="panelInputs"
           :runtime="generation.runtime.get(activeGenerateNode.id)"
@@ -103,6 +142,7 @@
           @generate="generation.submit(activeGenerateNode.id, $event)"
           @reference="openUpload(true)"
           @recharge="openRecharge"
+          @vip-guide="openVipGuide"
           @retry-options="loadOptions"
         />
       </div>
@@ -122,8 +162,29 @@
         <CanvasImageToolbar :busy="toolBusy" :can-describe="Boolean(sourceTaskId(toolNode))" @action="runImageTool" />
       </div>
 
-      <div v-if="!loading && !doc.nodes.length" class="empty-hint">
-        <p>{{ app.t('canvas.emptyHint') }}</p>
+      <div v-if="emptyGuideVisible" class="empty-guide" data-testid="canvas-empty-guide">
+        <section class="empty-guide-card" role="dialog" :aria-label="app.t('canvas.emptyGuide.title')" @pointerdown.stop @wheel.stop>
+          <p class="empty-guide-eyebrow">{{ app.t('canvas.emptyGuide.eyebrow') }}</p>
+          <h2 class="empty-guide-title">{{ app.t('canvas.emptyGuide.title') }}</h2>
+          <p class="empty-guide-subtitle">{{ app.t('canvas.emptyGuide.subtitle') }}</p>
+          <div class="empty-guide-options">
+            <button type="button" class="empty-guide-option" data-testid="canvas-empty-generate" @click="addGenerateNode">
+              <CanvasToolbarIcon name="sparkles" class="empty-guide-icon" />
+              <strong>{{ app.t('canvas.emptyGuide.generate') }}</strong>
+              <span>{{ app.t('canvas.emptyGuide.generateHint') }}</span>
+            </button>
+            <button type="button" class="empty-guide-option" data-testid="canvas-empty-upload" @click="openUpload(false)">
+              <CanvasToolbarIcon name="image-plus" class="empty-guide-icon" />
+              <strong>{{ app.t('canvas.emptyGuide.upload') }}</strong>
+              <span>{{ app.t('canvas.emptyGuide.uploadHint') }}</span>
+            </button>
+            <button type="button" class="empty-guide-option" data-testid="canvas-empty-blank" @click="emptyGuideDismissed = true">
+              <CanvasToolbarIcon name="pencil" class="empty-guide-icon" />
+              <strong>{{ app.t('canvas.emptyGuide.blank') }}</strong>
+              <span>{{ app.t('canvas.emptyGuide.blankHint') }}</span>
+            </button>
+          </div>
+        </section>
       </div>
 
       <div v-if="minimapOpen && minimap" class="minimap" :class="{ 'with-drawer': galleryOpen }" data-testid="canvas-minimap" @pointerdown.stop>
@@ -243,17 +304,6 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="consentVisible" :title="app.t('playground.aiConsentTitle')" width="min(480px, calc(100vw - 32px))" @closed="resolveConsent(false)">
-      <div class="consent-content">
-        <p>{{ app.t('playground.aiConsentDescription') }}</p>
-        <a v-if="consentNotice?.url" :href="consentNotice.url" target="_blank" rel="noreferrer">{{ app.t('playground.aiConsentDocument') }}</a>
-        <p v-if="consentNotice?.providerCodes.length">{{ app.t('playground.aiConsentProviders') }}: {{ consentNotice.providerCodes.join(', ') }}</p>
-      </div>
-      <template #footer>
-        <el-button :disabled="consentSubmitting" @click="consentVisible = false">{{ app.t('common.cancel') }}</el-button>
-        <el-button type="primary" :loading="consentSubmitting" @click="acceptConsent">{{ app.t('playground.aiConsentAccept') }}</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -262,7 +312,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Aim, ArrowLeft, CircleCheck, Close, Compass, FolderAdd, FolderRemove, Loading, Picture, Scissor, WarningFilled,
+  Aim, ArrowDown, ArrowUp, CircleCheck, Close, Compass, Delete, FolderAdd, FolderRemove, House, Loading, Picture, Plus,
+  RefreshLeft, RefreshRight, Scissor, WarningFilled,
 } from '@element-plus/icons-vue'
 import CanvasToolbarIcon from '@/components/canvas/CanvasToolbarIcon.vue'
 import CanvasGalleryDrawer from '@/components/canvas/CanvasGalleryDrawer.vue'
@@ -270,14 +321,13 @@ import CanvasGeneratePanel from '@/components/canvas/CanvasGeneratePanel.vue'
 import CanvasImageEditDialog, { type CanvasImageEditMode } from '@/components/canvas/CanvasImageEditDialog.vue'
 import CanvasImageToolbar, { type CanvasImageToolAction } from '@/components/canvas/CanvasImageToolbar.vue'
 import CanvasNodeView from '@/components/canvas/CanvasNodeView.vue'
-import { ensureModelPricing } from '@/composables/useCanvasGenerationOptions'
+import { offerVipMonthlyPass } from '@/utils/vipGuide'
 import { useCanvasGeneration, type CanvasGenerationResult } from '@/composables/useCanvasGeneration'
 import { useCanvasHistory } from '@/composables/useCanvasHistory'
 import { useCanvasPersistence } from '@/composables/useCanvasPersistence'
 import { getImageRecord, uploadReferenceImage } from '@/services/aiImages'
-import { assetContentUrl, assetThumbnailUrl, registerAiResultAsset, renameCanvas } from '@/services/canvases'
+import { assetContentUrl, assetThumbnailUrl, createCanvas, deleteCanvas, registerAiResultAsset, renameCanvas } from '@/services/canvases'
 import { fetchMediaBlob } from '@/utils/authenticatedMedia'
-import { getCurrentLegalDocuments, updateAiProcessingConsent } from '@/services/legal'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useCreditsStore } from '@/stores/credits'
@@ -292,7 +342,6 @@ import type { ApiError } from '@/types/api'
 import type {
   CanvasDocument, CanvasGalleryEntry, CanvasGenerateNode, CanvasGenerateNodeData, CanvasNode, CanvasPanelInput, CanvasTextNode,
 } from '@/types/canvas'
-import type { AiProcessingNotice } from '@/types/legal'
 
 type Interaction =
   | { kind: 'pan'; startX: number; startY: number; originX: number; originY: number }
@@ -339,9 +388,6 @@ const stage = ref<HTMLElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const stageSize = ref({ width: 1200, height: 800 })
 const optionsReady = ref(false)
-const consentVisible = ref(false)
-const consentSubmitting = ref(false)
-const consentNotice = ref<AiProcessingNotice | null>(null)
 const toolBusy = ref<CanvasImageToolAction | null>(null)
 const toolbarAnchor = ref<HTMLElement | null>(null)
 const toolbarWidth = ref(620)
@@ -349,7 +395,11 @@ const editTool = ref<{ mode: CanvasImageEditMode; nodeId: string; assetId: strin
 const editUploading = ref(false)
 const previewUrl = ref('')
 const describeState = reactive({ visible: false, prompt: '', nodeId: '' })
-let consentResolver: ((accepted: boolean) => void) | null = null
+const brandMenuOpen = ref(false)
+const menuBusy = ref(false)
+const emptyGuideDismissed = ref(false)
+// Set once the canvas is deleted so leaving the page does not try to save into a missing canvas.
+let canvasDeleted = false
 let toolbarObserver: ResizeObserver | null = null
 let uploadConnectsToActive = false
 let lastSerialized = ''
@@ -400,16 +450,14 @@ const history = useCanvasHistory(() => doc.value, (snapshot) => {
   selected.value = new Set([...selected.value].filter((id) => findNode(doc.value, id)))
 })
 
+const generatePanel = ref<InstanceType<typeof CanvasGeneratePanel> | null>(null)
 const generation = useCanvasGeneration({
   getDocument: () => doc.value,
   // Mark synchronously so the following flush() persists the idempotency key before the request is sent.
   markChanged: () => persistence.markChanged(),
   flush: () => persistence.flush(),
-  requestConsent,
-  onCatalogChanged: async () => {
-    await loadOptions()
-    optionsStore.options.models.forEach((model) => void ensureModelPricing(model, true))
-  },
+  onCatalogChanged: refreshCanvasQuotes,
+  onVipRequired: openVipGuide,
 })
 
 const worldStyle = computed(() => ({
@@ -422,6 +470,7 @@ const gridStyle = computed(() => {
     backgroundPosition: `${doc.value.viewport.x}px ${doc.value.viewport.y}px`,
   }
 })
+const emptyGuideVisible = computed(() => !loading.value && !loadError.value && !doc.value.nodes.length && !emptyGuideDismissed.value)
 const activeGenerateNode = computed(() => {
   if (selected.value.size !== 1) return null
   const node = findNode(doc.value, [...selected.value][0])
@@ -640,7 +689,14 @@ watch(doc, () => {
   history.schedule()
 }, { deep: true })
 
+async function refreshCanvasQuotes() {
+  await loadOptions()
+  await generatePanel.value?.refreshPricing()
+}
+
 onMounted(async () => {
+  window.addEventListener('focus', refreshCanvasQuotes)
+  window.addEventListener('vip:changed', refreshCanvasQuotes)
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('keyup', handleKeyup)
   window.addEventListener('paste', handlePaste)
@@ -681,6 +737,8 @@ watch(toolbarAnchor, (element) => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('focus', refreshCanvasQuotes)
+  window.removeEventListener('vip:changed', refreshCanvasQuotes)
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('keyup', handleKeyup)
   window.removeEventListener('paste', handlePaste)
@@ -691,6 +749,7 @@ onBeforeUnmount(() => {
 })
 
 onBeforeRouteLeave(async () => {
+  if (canvasDeleted) return true
   await Promise.race([persistence.flush().catch(() => undefined), new Promise((resolve) => setTimeout(resolve, 3000))])
   return true
 })
@@ -1205,7 +1264,7 @@ function handleDrop(event: DragEvent) {
 // Pasting an image anywhere in the editor uploads it. With a generate node selected the image becomes its reference input
 // (including while typing in its prompt); otherwise it lands under the pointer. Text pastes into inputs stay native.
 function handlePaste(event: ClipboardEvent) {
-  if (event.defaultPrevented || consentVisible.value || toolOverlayOpen()) return
+  if (event.defaultPrevented || toolOverlayOpen()) return
   const data = event.clipboardData
   if (!data) return
   const files = clipboardImageFiles(data)
@@ -1260,7 +1319,7 @@ function toolOverlayOpen() {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  if (isEditableTarget(event.target) || consentVisible.value || toolOverlayOpen()) return
+  if (isEditableTarget(event.target) || toolOverlayOpen()) return
   const modifier = event.ctrlKey || event.metaKey
   if (event.code === 'Space') {
     spacePressed.value = true
@@ -1521,46 +1580,63 @@ async function goBack() {
   await router.push({ name: 'canvas' })
 }
 
+function handleBrandCommand(command: string) {
+  if (command === 'home') void goBack()
+  else if (command === 'create') void createNewCanvas()
+  else if (command === 'delete') void deleteCurrentCanvas()
+  else if (command === 'undo') history.undo()
+  else if (command === 'redo') history.redo()
+}
+
+async function createNewCanvas() {
+  if (menuBusy.value) return
+  menuBusy.value = true
+  try {
+    await persistence.flush().catch(() => undefined)
+    const canvas = await createCanvas()
+    await router.push({ name: 'canvas-editor', params: { canvasId: canvas.canvasId } })
+  } catch (error) {
+    const code = String((error as ApiError)?.code || '').toUpperCase()
+    ElMessage.error(code === 'CANVAS_LIMIT_EXCEEDED' ? app.t('canvas.limitReached') : (error as ApiError)?.message || app.t('canvas.createFailed'))
+  } finally {
+    menuBusy.value = false
+  }
+}
+
+async function deleteCurrentCanvas() {
+  if (menuBusy.value) return
+  try {
+    await ElMessageBox.confirm(app.t('canvas.deleteConfirm').replace('{title}', savedTitle.value || titleDraft.value), app.t('canvas.menu.delete'), {
+      type: 'warning',
+      confirmButtonText: app.t('common.delete'),
+      cancelButtonText: app.t('common.cancel'),
+      confirmButtonClass: 'el-button--danger',
+    })
+  } catch {
+    return
+  }
+  menuBusy.value = true
+  try {
+    // Settle pending autosave timers first so none fires against the deleted canvas.
+    await persistence.flush().catch(() => undefined)
+    await deleteCanvas(canvasId)
+    canvasDeleted = true
+    ElMessage.success(app.t('canvas.deleted'))
+    await router.push({ name: 'canvas' })
+  } catch (error) {
+    ElMessage.error((error as ApiError)?.message || app.t('canvas.deleteFailed'))
+  } finally {
+    menuBusy.value = false
+  }
+}
+
+function openVipGuide(modelCode: string) {
+  return offerVipMonthlyPass(router, modelCode, () => persistence.flush().catch(() => undefined))
+}
+
 async function openRecharge() {
   await persistence.flush().catch(() => undefined)
   await router.push({ name: 'recharge' })
-}
-
-async function requestConsent() {
-  try {
-    const documents = await getCurrentLegalDocuments(app.locale)
-    const notice = documents?.aiProcessingNotice
-    if (!notice?.version || !notice.url || !notice.providerCodes?.length) throw new Error('AI processing notice is incomplete')
-    consentNotice.value = notice
-  } catch {
-    ElMessage.error(app.t('playground.aiConsentUnavailable'))
-    return false
-  }
-  consentVisible.value = true
-  return new Promise<boolean>((resolve) => {
-    consentResolver = resolve
-  })
-}
-
-async function acceptConsent() {
-  const notice = consentNotice.value
-  if (!notice) return
-  consentSubmitting.value = true
-  try {
-    await updateAiProcessingConsent({ accepted: true, documentVersion: notice.version, providerCodes: notice.providerCodes, clientPlatform: 'web' })
-    resolveConsent(true)
-    consentVisible.value = false
-  } catch {
-    ElMessage.error(app.t('playground.aiConsentFailed'))
-  } finally {
-    consentSubmitting.value = false
-  }
-}
-
-function resolveConsent(accepted: boolean) {
-  const resolver = consentResolver
-  consentResolver = null
-  resolver?.(accepted)
 }
 </script>
 
@@ -1586,22 +1662,36 @@ function resolveConsent(accepted: boolean) {
   background: var(--color-surface);
 }
 
-.header-back {
+.brand-trigger {
   display: inline-flex;
-  width: 32px;
-  height: 32px;
+  height: 36px;
   align-items: center;
-  justify-content: center;
+  gap: 4px;
+  padding: 0 6px 0 4px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
   color: var(--color-text);
-  font-size: 18px;
   cursor: pointer;
 }
 
-.header-back:hover {
+.brand-trigger:hover,
+.brand-trigger.active,
+.brand-trigger:focus-visible {
   background: var(--color-primary-soft);
+  outline: none;
+}
+
+.brand-logo {
+  display: block;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.brand-arrow {
+  color: var(--color-text-muted);
+  font-size: 12px;
 }
 
 .title-input {
@@ -1831,14 +1921,124 @@ function resolveConsent(accepted: boolean) {
   z-index: 16;
 }
 
-.empty-hint {
+.empty-guide {
+  --empty-guide-accent: var(--color-primary);
   position: absolute;
-  inset: 0;
+  inset: 0 0 80px;
+  z-index: 12;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--color-text-muted);
+  padding: 24px;
   pointer-events: none;
+}
+
+.empty-guide-card {
+  width: min(720px, 100%);
+  padding: 32px 32px 30px;
+  border: 1px solid var(--color-border);
+  border-radius: 24px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  pointer-events: auto;
+}
+
+.empty-guide-eyebrow {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+}
+
+.empty-guide-title {
+  margin: 12px 0 0;
+  color: var(--color-text);
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.empty-guide-subtitle {
+  margin: 12px 0 0;
+  color: var(--color-text-muted);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.empty-guide-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.empty-guide-option {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--color-text) 5%, var(--color-surface));
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+
+.empty-guide-option:hover,
+.empty-guide-option:focus-visible {
+  border-color: var(--empty-guide-accent);
+  background: color-mix(in srgb, var(--empty-guide-accent) 10%, var(--color-surface));
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.empty-guide-icon {
+  width: 24px;
+  height: 24px;
+  color: var(--empty-guide-accent);
+  stroke-width: 1.8;
+}
+
+.empty-guide-option strong {
+  margin-top: 26px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.empty-guide-option span {
+  margin-top: 6px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  .empty-guide-card {
+    padding: 22px 18px;
+  }
+
+  .empty-guide-title {
+    font-size: 24px;
+  }
+
+  .empty-guide-options {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    margin-top: 20px;
+  }
+
+  .empty-guide-option {
+    padding: 14px 16px;
+  }
+
+  .empty-guide-option strong {
+    margin-top: 10px;
+  }
 }
 
 .corner-controls,
@@ -2086,9 +2286,33 @@ function resolveConsent(accepted: boolean) {
 .hidden-file-input {
   display: none;
 }
+</style>
 
-.consent-content {
-  display: grid;
-  gap: 10px;
+<style>
+/* The brand dropdown is teleported to <body>, so its styles cannot be scoped. */
+.canvas-brand-menu.el-dropdown__popper .el-dropdown-menu {
+  min-width: 180px;
+  padding: 6px;
+}
+
+.canvas-brand-menu .el-dropdown-menu__item {
+  gap: 4px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.canvas-brand-menu .el-dropdown-menu__item--divided {
+  margin: 6px 0 0;
+}
+
+.canvas-brand-menu .el-dropdown-menu__item.is-danger:not(.is-disabled) {
+  color: var(--el-color-danger);
+}
+
+.canvas-brand-menu .el-dropdown-menu__item.is-danger:not(.is-disabled):hover,
+.canvas-brand-menu .el-dropdown-menu__item.is-danger:not(.is-disabled):focus {
+  background: var(--el-color-danger-light-9);
+  color: var(--el-color-danger);
 }
 </style>

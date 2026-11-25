@@ -6,6 +6,7 @@
         <strong>{{ taskStatusText }}</strong>
       </div>
 
+      <el-tag v-if="record.outputFormat === 'gif'" class="format-badge" size="small">GIF</el-tag>
       <div class="hover-layer">
         <div class="top-actions">
           <el-button
@@ -40,7 +41,9 @@
       <strong>{{ shortPrompt }}</strong>
       <span>{{ meta }}</span>
       <div v-if="record.pointCost !== undefined || record.billingStatus !== undefined" class="billing-meta">
-        <span>{{ app.t('gallery.pointCost') }}: {{ record.pointCost ?? '-' }}</span>
+        <span>{{ app.t('gallery.pointCost') }}: {{ record.chargedPoints ?? record.pointCost ?? '-' }}</span>
+        <VipPriceSummary v-if="record.pricingTier === 'vip'" :list="record.listUnitPointCost" :paid="record.unitPointCost" :count="record.imageCount || 1" />
+        <span v-else-if="record.pricingTier === 'standard'">{{ app.t('vipPricing.standard') }}</span>
         <span>{{ billingStatusText }}</span>
       </div>
     </div>
@@ -48,6 +51,7 @@
 </template>
 
 <script setup lang="ts">
+import VipPriceSummary from '@/components/pricing/VipPriceSummary.vue'
 import { computed } from 'vue'
 import { useAuthenticatedImageUrl } from '@/composables/useAuthenticatedImageUrls'
 import { useAppStore } from '@/stores/app'
@@ -104,7 +108,7 @@ const billingStatusText = computed(() => {
 })
 
 function download() {
-  downloadImage(sourceImageUrl.value, `image-${props.record.id || globalThis.crypto?.randomUUID?.() || 'generated'}.png`)
+  downloadImage(sourceImageUrl.value, `image-${props.record.id || globalThis.crypto?.randomUUID?.() || 'generated'}`)
 }
 
 function isPositiveDimension(value: number | null | undefined): value is number {
@@ -115,6 +119,7 @@ function isPositiveDimension(value: number | null | undefined): value is number 
 <style scoped>
 .image-card { overflow: hidden; transition: .18s ease; cursor: pointer; }
 .image-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-card-hover); }
+.format-badge { position: absolute; top: 10px; left: 10px; }
 .image-shell { position: relative; overflow: hidden; background: var(--color-primary-soft); }
 img, .placeholder { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--color-primary-soft); }
 .placeholder { display: grid; place-items: center; padding: 18px; color: var(--color-text-muted); text-align: center; }

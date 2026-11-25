@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getImageModels, getImageParameters } from '@/services/aiImages'
+import { getImageModels, getImageParameters, getPricingOptions } from '@/services/aiImages'
+import { useAuthStore } from '@/stores/auth'
+import { getStoredToken } from '@/services/http'
 import type { Locale } from '@/types/app'
 import type { ImageParameterApiOption, ImageParameterOption, ImageParameters, ImageParametersResponse } from '@/types/image'
 
@@ -35,6 +37,8 @@ const localizedLabels: Record<ImageOptionCategory, Record<string, Record<Locale,
     med: { 'zh-CN': 'Medium(标准)', 'en-US': 'Medium(Standard)' },
     medium: { 'zh-CN': 'Medium(标准)', 'en-US': 'Medium(Standard)' },
     high: { 'zh-CN': 'High(高精细)', 'en-US': 'High(High Detail)' },
+    xhigh: { 'zh-CN': 'Xhigh(超高精细)', 'en-US': 'Xhigh(Extra Detail)' },
+    max: { 'zh-CN': 'Max(极致)', 'en-US': 'Max(Maximum Detail)' },
   },
   aspectRatios: {
     auto: { 'zh-CN': '自动', 'en-US': 'Auto' },
@@ -115,11 +119,26 @@ export const useImageOptionsStore = defineStore('imageOptions', () => {
   const loading = ref(false)
   const modelCapabilitiesReady = ref(false)
 
-  async function fetchOptions() {
+  const auth = useAuthStore()
+  let pending: { token: string | null; promise: Promise<void> } | undefined
+  let lastQuoteRevision: number | undefined
+
+  function fetchOptions() {
+    const token = getStoredToken()
+    if (pending?.token === token) return pending.promise
+    const promise = loadOptions(token).finally(() => {
+      if (pending?.promise === promise) pending = undefined
+    })
+    pending = { token, promise }
+    return promise
+  }
+
+  async function loadOptions(token: string | null) {
     loading.value = true
     modelCapabilitiesReady.value = false
     try {
       const [parametersResult, modelsResult] = await Promise.allSettled([getImageParameters(), getImageModels()])
+      if (token !== getStoredToken() || token !== auth.token) throw new Error('Session changed')
       const normalizedParameters = parametersResult.status === 'fulfilled'
         ? normalizeImageParameters(parametersResult.value)
         : options.value
@@ -133,9 +152,28 @@ export const useImageOptionsStore = defineStore('imageOptions', () => {
       if (modelsResult.status === 'rejected') throw modelsResult.reason
       modelCapabilitiesReady.value = modelOptions.length > 0
     } finally {
-      loading.value = false
+      if (token === getStoredToken()) loading.value = false
     }
   }
 
-  return { options, loading, modelCapabilitiesReady, fetchOptions }
+  async function fetchModelPricing(model: ImageParameterOption) {
+    const token = getStoredToken()
+    const usesV1 = model.sizeContractVersion === 'size-mode-v1'
+    const request = () => getPricingOptions(usesV1 ? model.value : undefined, usesV1 ? model.catalogVersion : undefined)
+    let quote = await request()
+    const revision = Array.isArray(quote) ? undefined : quote.pricingRevision
+    const changed = [options.value.pricingRevision, lastQuoteRevision].some(known => known != null && known !== revision)
+    if (revision != null && changed) {
+      await fetchOptions()
+      quote = await request()
+      if (!Array.isArray(quote) && options.value.pricingRevision != null && quote.pricingRevision !== options.value.pricingRevision) {
+        throw new Error('Image pricing changed during refresh')
+      }
+    }
+    if (token !== getStoredToken() || token !== auth.token) throw new Error('Session changed')
+    lastQuoteRevision = Array.isArray(quote) ? undefined : quote.pricingRevision
+    return quote
+  }
+
+  return { options, loading, modelCapabilitiesReady, fetchOptions, fetchModelPricing }
 })

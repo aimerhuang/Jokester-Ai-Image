@@ -22,16 +22,36 @@
             />
           </el-form-item>
           <el-form-item :label="app.t('playground.model')">
-            <el-select v-model="modelCode" :loading="optionsStore.loading">
-              <el-option v-for="item in modelOptions" :key="item.value" :label="item.name || item.label" :value="item.value" />
-            </el-select>
+            <ModelPicker v-model="modelCode" :models="modelOptions" :loading="optionsStore.loading" @locked="offerMembership" />
           </el-form-item>
+          <el-form-item v-if="gifCapability" :label="app.t('gif.format')">
+            <el-segmented v-model="outputFormat" class="format-toggle" :options="[{ label: 'PNG', value: 'png' }, { label: 'GIF', value: 'gif' }]" />
+          </el-form-item>
+          <div v-if="selectedModel?.access?.available === false" class="insufficient-notice" role="status">
+            <span>{{ app.t('vipPricing.locked') }}</span>
+            <el-button link type="primary" @click="offerMembership()">{{ app.t('vipPricing.buy') }}</el-button>
+          </div>
+          <p v-else-if="selectedModel?.access?.basis === 'super_admin'">{{ app.t('vipPricing.admin') }}</p>
           <div class="parameter-grid">
             <el-form-item v-if="usesSizeModeV1 && sizeModeOptions.length > 1" :label="app.t('playground.sizeMode')">
               <el-segmented v-model="sizeMode" :options="sizeModeOptions" />
             </el-form-item>
-            <el-form-item v-if="showsExplicitSizeFields" :label="app.t('playground.resolution')"><el-segmented v-model="form.resolutionCode" :options="resolutionOptions" /></el-form-item>
-            <el-form-item v-if="supportsQuality" :label="app.t('playground.quality')"><el-segmented v-model="form.qualityCode" :options="qualityOptions" /></el-form-item>
+            <div v-if="isGif" class="inline-parameter-row" :class="{ 'single-parameter': !supportsQuality }">
+              <el-form-item :label="app.t('playground.resolution')"><el-select disabled :model-value="''" :placeholder="app.t('gif.defaultResolution')" /></el-form-item>
+              <el-form-item v-if="supportsQuality" :label="app.t('playground.quality')">
+                <el-select v-model="form.qualityCode" data-testid="gif-quality-select">
+                  <el-option v-for="item in qualityOptions" :key="item.value" :label="item.label" :value="item.value" />
+                </el-select>
+              </el-form-item>
+            </div>
+            <template v-else>
+              <el-form-item v-if="showsExplicitSizeFields" :label="app.t('playground.resolution')"><el-segmented v-model="form.resolutionCode" :options="resolutionOptions" /></el-form-item>
+              <el-form-item v-if="supportsQuality" :label="app.t('playground.quality')"><el-segmented v-model="form.qualityCode" :options="qualityOptions" /></el-form-item>
+            </template>
+            <div v-if="isGif && gifCapability" class="inline-parameter-row">
+              <el-form-item :label="app.t('gif.frames')"><el-select v-model="frameCount"><el-option v-for="n in gifCapability.frameCounts" :key="n" :label="frameOptionLabel(n)" :value="n" /></el-select></el-form-item>
+              <el-form-item :label="app.t('gif.duration')"><el-select v-model="frameDurationMs"><el-option v-for="ms in gifCapability.frameDurationsMs" :key="ms" :label="durationOptionLabel(ms)" :value="ms" /></el-select></el-form-item>
+            </div>
             <div class="inline-parameter-row" :class="{ 'single-parameter': !showsExplicitSizeFields }">
               <el-form-item v-if="showsExplicitSizeFields" :label="app.t('playground.aspectRatio')">
                 <el-select v-model="form.aspectRatioCode">
@@ -56,7 +76,11 @@
           <div class="generate-row">
             <div class="cost-summary">
               <span class="credit-hint">{{ app.t('playground.availableBalance') }}: {{ balanceText }}</span>
-              <span class="cost-hint">{{ app.t('playground.estimatedCost') }}: {{ estimatedPointsText }}</span>
+              <template v-if="isGif">
+                <span class="cost-hint">{{ app.t('playground.estimatedCost') }}: {{ estimatedPointsText }}</span>
+                <el-button link type="primary" @click="billingOpen = true">{{ app.t('gif.rule') }}</el-button>
+              </template>
+              <span v-else class="cost-hint">{{ app.t('playground.estimatedCost') }}: {{ estimatedPointsText }} <VipPriceSummary v-if="selectedPricingOption?.pricingTier === 'vip'" :list="selectedPricingOption.points" :paid="selectedPricingOption.effectivePoints" :count="batchSize" /></span>
             </div>
             <div v-if="hasInsufficientPoints" class="insufficient-notice" role="alert">
               <span>{{ app.t('playground.insufficientPoints') }}</span>
@@ -71,10 +95,11 @@
             </div>
             <span class="deduction-rule">{{ app.t('playground.deductionRule') }}</span>
             <span v-if="rateLimitRemainingSeconds" class="rate-limit-hint">{{ rateLimitText }}</span>
-            <el-button type="primary" class="soft-button generate" size="large" :loading="busy" :disabled="!hasValidPrompt || referenceUploading || generationBlocked || generationPrerequisitesUnavailable || hasInsufficientPoints || rateLimitRemainingSeconds > 0" @click="submit">{{ rateLimitRemainingSeconds ? rateLimitText : app.t('common.generate') }}</el-button>
+            <el-button type="primary" class="soft-button generate" size="large" :loading="busy" :disabled="selectedModel?.access?.available === false || !hasValidPrompt || referenceUploading || generationBlocked || generationPrerequisitesUnavailable || hasInsufficientPoints || rateLimitRemainingSeconds > 0" @click="submit">{{ rateLimitRemainingSeconds ? rateLimitText : app.t('common.generate') }}</el-button>
           </div>
         </el-form>
       </section>
+      <GifBillingDialog v-if="gifCapability" v-model="billingOpen" :capability="gifCapability" :quality-code="form.qualityCode" :frame-count="frameCount" :reference-count="form.referenceImageUrls.length + form.referenceAssetIds.length" />
       <ResultPreview
         :title="app.t('playground.previewTitle')"
         :loading-text="app.t('common.generating')"
@@ -93,36 +118,15 @@
         <el-button type="primary" plain :disabled="!form.prompt" @click="copyPrompt">{{ app.t('playground.copyPrompt') }}</el-button>
       </ResultPreview>
     </div>
-    <el-dialog
-      v-model="aiConsentVisible"
-      :title="app.t('playground.aiConsentTitle')"
-      width="min(480px, calc(100vw - 32px))"
-      :close-on-click-modal="!consentSubmitting"
-      :close-on-press-escape="!consentSubmitting"
-      :show-close="!consentSubmitting"
-      @closed="clearPendingConsent"
-    >
-      <div class="consent-content">
-        <p>{{ app.t('playground.aiConsentDescription') }}</p>
-        <a
-          v-if="aiProcessingNotice?.url"
-          :href="aiProcessingNotice.url"
-          target="_blank"
-          rel="noreferrer"
-        >{{ app.t('playground.aiConsentDocument') }}</a>
-        <p v-if="aiProcessingNotice?.providerCodes.length" class="consent-providers">
-          {{ app.t('playground.aiConsentProviders') }}: {{ aiProcessingNotice.providerCodes.join(', ') }}
-        </p>
-      </div>
-      <template #footer>
-        <el-button :disabled="consentSubmitting" @click="aiConsentVisible = false">{{ app.t('common.cancel') }}</el-button>
-        <el-button type="primary" :loading="consentSubmitting" @click="acceptAiProcessingConsent">{{ app.t('playground.aiConsentAccept') }}</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import VipPriceSummary from '@/components/pricing/VipPriceSummary.vue'
+import GifBillingDialog from '@/components/images/GifBillingDialog.vue'
+import { calculateReservePoints } from '@/utils/gifBilling'
+import ModelPicker from '@/components/images/ModelPicker.vue'
+import { pickUsableModelCode } from '@/utils/modelPresentation'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Coin, Delete } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -130,20 +134,20 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import ReferenceUploader from '@/components/images/ReferenceUploader.vue'
 import ResultPreview from '@/components/images/ResultPreview.vue'
 import { normalizeTaskStatus, useImageTaskPolling, type ImageTaskSnapshot } from '@/composables/useImageTaskPolling'
-import { generateImage, getImageRecords, getMaxImageCount, getPricingOptions, isNanoBananaModel } from '@/services/aiImages'
-import { getCurrentLegalDocuments, updateAiProcessingConsent } from '@/services/legal'
+import { generateImage, getImageRecords, getMaxImageCount, isNanoBananaModel } from '@/services/aiImages'
 import { downloadImage, getImageUrl, getImageUrls, takeReuseConfig } from '@/utils/imageActions'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useCreditsStore } from '@/stores/credits'
 import { fallbackImageParameters, getLocalizedImageOptionLabel, sortImageResolutionCodes, useImageOptionsStore } from '@/stores/imageOptions'
 import { usePlaygroundDraftStore } from '@/stores/playgroundDraft'
+import { getStoredToken } from '@/services/http'
+import { offerVipMonthlyPass } from '@/utils/vipGuide'
 import { startImageTaskHistoryRecovery } from '@/utils/imageTaskRecovery'
 import { isPricingEnvelope, normalizePricingOption, unwrapPricingResult } from '@/utils/imagePricing'
 import type { PlaygroundReferenceDraft } from '@/stores/playgroundDraft'
 import type { ApiError } from '@/types/api'
 import type { CreateImageTaskRequest, GeneratedImageBatchItem, GeneratedImageResult, AiImagePricingOption, ImageParameterOption, ImageSizeMode } from '@/types/image'
-import type { AiProcessingNotice } from '@/types/legal'
 
 const app = useAppStore()
 const route = useRoute()
@@ -155,10 +159,6 @@ const draftStore = usePlaygroundDraftStore()
 const draftUserId = auth.user?.id ?? null
 const restoredDraft = draftStore.getDraft(draftUserId)
 const submitting = ref(false)
-const consentSubmitting = ref(false)
-const aiConsentVisible = ref(false)
-const aiProcessingNotice = ref<AiProcessingNotice | null>(null)
-const pendingConsentRequest = ref<CreateImageTaskRequest | null>(null)
 const referenceUploading = ref(false)
 const referenceDrafts = ref<PlaygroundReferenceDraft[]>(restoredDraft.references)
 const result = ref<GeneratedImageResult | null>(null)
@@ -167,6 +167,10 @@ const activeImageCount = ref(0)
 const pricingOptions = ref<AiImagePricingOption[]>([])
 const pricingCatalogVersion = ref('')
 const modelCode = ref(restoredDraft.modelCode)
+const outputFormat = ref(restoredDraft.outputFormat)
+const frameCount = ref(restoredDraft.frameCount)
+const frameDurationMs = ref(restoredDraft.frameDurationMs)
+const billingOpen = ref(false)
 const sizeMode = ref<ImageSizeMode | null>(restoredDraft.sizeMode)
 const lastExplicitResolutionCode = ref(restoredDraft.lastExplicitResolutionCode || restoredDraft.resolutionCode)
 const lastExplicitAspectRatioCode = ref(restoredDraft.lastExplicitAspectRatioCode || (restoredDraft.aspectRatioCode === 'auto' ? '' : restoredDraft.aspectRatioCode))
@@ -241,6 +245,8 @@ const { polling, handleInitialResult, resumePending } = useImageTaskPolling({
 const modelOptions = computed(() => optionsStore.options.models || [])
 const selectedModel = computed(() => modelOptions.value.find((item) => item.value === modelCode.value))
 const usesSizeModeV1 = computed(() => selectedModel.value?.sizeContractVersion === 'size-mode-v1')
+const gifCapability = computed(() => usesSizeModeV1.value ? null : selectedModel.value?.capabilities?.gif)
+const isGif = computed(() => outputFormat.value === 'gif' && Boolean(gifCapability.value))
 const supportsQuality = computed(() => selectedModel.value?.capabilities?.supportsQuality !== false)
 const isNanoModel = computed(() => isGeminiImageModel(selectedModel.value, modelCode.value))
 const availablePricingOptions = computed<AiImagePricingOption[]>(() => pricingOptions.value)
@@ -288,6 +294,11 @@ const resolutionOptions = computed(() => parameterOptionsForCodes(
 ))
 const qualityOptions = computed(() => {
   const declaredCodes = selectedModel.value?.qualities ?? optionsStore.options.qualities.map((item) => item.value)
+  if (isGif.value && gifCapability.value) {
+    const { perFramePoints } = gifCapability.value.reserve
+    const codes = declaredCodes.filter(code => Object.hasOwn(perFramePoints, code))
+    return parameterOptionsForCodes('qualities', codes, optionsStore.options.qualities)
+  }
   const priceConstrainedCodes = pricingReady.value
     ? declaredCodes.filter((code) => modelPricingOptions.value.some((item) => {
         if (normalizeKey(item.qualityCode || item.qualityName) !== normalizeKey(code)) return false
@@ -302,6 +313,7 @@ const qualityOptions = computed(() => {
 })
 const aspectOptions = computed(() => {
   const supportedCodes = [...(selectedModel.value?.aspectRatios || [])]
+  if (isGif.value) return parameterOptionsForCodes('aspectRatios', supportedCodes.filter(code => code !== 'auto'), optionsStore.options.aspectRatios)
   const catalogAutoCode = optionsStore.options.aspectRatios
     .find((item) => normalizeKey(item.value) === 'auto')?.value
   if (selectedModel.value
@@ -382,9 +394,17 @@ const selectedPricingOption = computed(() => availablePricingOptions.value.find(
   }
   return [item.resolutionCode, item.resolutionName].some((value) => normalizeKey(value) === selectedResolution)
 }))
-const estimatedPoints = computed(() => selectedPricingOption.value ? selectedPricingOption.value.points * batchSize.value : null)
+const unitPoints = computed(() => {
+  if (isGif.value && gifCapability.value) {
+    if (!frameCount.value) return null
+    return calculateReservePoints(gifCapability.value.reserve, form.qualityCode, frameCount.value, form.referenceImageUrls.length + form.referenceAssetIds.length)
+  }
+  return selectedPricingOption.value?.effectivePoints ?? selectedPricingOption.value?.points ?? null
+})
+const estimatedPoints = computed(() => unitPoints.value == null ? null : unitPoints.value * batchSize.value)
+const quoteReady = computed(() => isGif.value ? unitPoints.value != null : pricingReady.value)
 const estimatedPointsText = computed(() => {
-  if (!pricingReady.value) return app.t('common.loading')
+  if (!quoteReady.value) return app.t('common.loading')
   return estimatedPoints.value ?? '—'
 })
 const balanceText = computed(() => {
@@ -396,6 +416,10 @@ const hasInsufficientPoints = computed(() => balanceReady.value
   && estimatedPoints.value > credits.summary.balance)
 const validParameterSelection = computed(() => {
   if (!modelCode.value) return false
+  if (isGif.value) return Boolean(gifCapability.value?.frameCounts.includes(frameCount.value ?? 0)
+    && gifCapability.value.frameDurationsMs.includes(frameDurationMs.value ?? 0)
+    && qualityOptions.value.some(item => item.value === form.qualityCode)
+    && aspectOptions.value.some(item => item.value === form.aspectRatioCode))
   if (usesSizeModeV1.value) {
     if (!sizeMode.value || !selectableSizeModes.value.includes(sizeMode.value)) return false
     if (supportsQuality.value && !form.qualityCode) return false
@@ -406,11 +430,11 @@ const validParameterSelection = computed(() => {
 const modelCapabilityUnavailable = computed(() => optionsStore.modelCapabilitiesReady
   && Boolean(selectedModel.value)
   && (usesSizeModeV1.value ? declaredSizeModes.value.length === 0 : aspectOptions.value.length === 0))
-const pricingSelectionMissing = computed(() => pricingReady.value
+const pricingSelectionMissing = computed(() => !isGif.value && pricingReady.value
   && validParameterSelection.value
   && !selectedPricingOption.value)
 const generationDataError = computed(() => balanceLoadFailed.value
-  || pricingLoadFailed.value
+  || (!isGif.value && pricingLoadFailed.value)
   || optionsLoadFailed.value
   || modelCapabilityUnavailable.value
   || pricingSelectionMissing.value)
@@ -420,13 +444,24 @@ const generationDataMessage = computed(() => balanceLoadFailed.value
     ? app.t('playground.optionsUnavailable')
     : app.t('playground.pricingUnavailable'))
 const generationPrerequisitesUnavailable = computed(() => !balanceReady.value
-  || !pricingReady.value
+  || !quoteReady.value
   || optionsStore.loading
   || !optionsStore.modelCapabilitiesReady
   || optionsLoadFailed.value
   || !validParameterSelection.value
-  || !selectedPricingOption.value)
+  || unitPoints.value == null)
 const rateLimitText = computed(() => app.t('playground.rateLimitCountdown').replace('{seconds}', String(rateLimitRemainingSeconds.value)))
+
+watch([selectedModel, gifCapability], ([model, gif]) => {
+  if (!model) return // Restored drafts wait for the initial model catalog.
+  if (!gif) {
+    outputFormat.value = 'png'
+    billingOpen.value = false
+    return
+  }
+  if (!gif.frameCounts.includes(frameCount.value ?? 0)) frameCount.value = gif.defaultFrameCount
+  if (!gif.frameDurationsMs.includes(frameDurationMs.value ?? 0)) frameDurationMs.value = gif.defaultFrameDurationMs
+}, { immediate: true })
 
 watch(maxImageCount, (max) => {
   if (batchSize.value > max) batchSize.value = max
@@ -448,17 +483,22 @@ watch(() => form.prompt, (prompt) => {
   draftStore.saveManualPrompt(draftUserId, prompt)
 })
 
+function offerMembership(code = modelCode.value) {
+  return offerVipMonthlyPass(router, code, persistDraft)
+}
+watch(modelCode, () => { if (selectedModel.value?.access?.available === false) void offerMembership() })
+
 watch(modelOptions, (items) => {
   if (!items.length) return
   const currentModelCode = modelCode.value
   const selected = items.find((item) => item.value === currentModelCode)
     || items.find((item) => [item.name, item.label].some((value) => normalizeKey(value) === normalizeKey(currentModelCode)))
-  const nextModelCode = selected?.value || items[0]?.value || ''
+  const nextModelCode = pickUsableModelCode(items, selected?.value)
   if (nextModelCode !== currentModelCode) modelCode.value = nextModelCode
 }, { immediate: true })
 
 watch(
-  () => [selectedModel.value?.value, selectedModel.value?.sizeContractVersion, selectedModel.value?.catalogVersion],
+  [() => selectedModel.value?.value, () => selectedModel.value?.sizeContractVersion, () => selectedModel.value?.catalogVersion, () => auth.user?.id, () => auth.token],
   () => {
     pricingReady.value = false
     pricingLoadFailed.value = false
@@ -472,6 +512,9 @@ watch(
 
 watch([
   () => form.prompt,
+  outputFormat,
+  frameCount,
+  frameDurationMs,
   () => form.resolutionCode,
   () => form.qualityCode,
   () => form.aspectRatioCode,
@@ -485,8 +528,8 @@ watch([
   sourcePromptId,
   referenceDrafts,
 ], persistDraft, { deep: true })
-watch(resolutionOptions, (items) => {
-  if (!showsExplicitSizeFields.value) return
+watch([resolutionOptions, isGif], ([items, gif]) => {
+  if (gif || !showsExplicitSizeFields.value) return
   const preferred = lastExplicitResolutionCode.value || form.resolutionCode
   if (!items.some((item) => item.value === form.resolutionCode)) {
     form.resolutionCode = items.find((item) => item.value === preferred)?.value
@@ -497,7 +540,7 @@ watch(qualityOptions, (items) => {
   if (!items.some((item) => item.value === form.qualityCode)) form.qualityCode = items[0]?.value || ''
 }, { immediate: true })
 watch(aspectOptions, (items) => {
-  if (!showsExplicitSizeFields.value) return
+  if (!selectedModel.value || !showsExplicitSizeFields.value) return
   if (!items.some((item) => item.value === form.aspectRatioCode)) {
     const migratesLegacyGptAuto = draftStore.needsMigration
       && usesSizeModeV1.value
@@ -524,6 +567,8 @@ watch(() => form.aspectRatioCode, (value) => {
 })
 
 onMounted(() => {
+  window.addEventListener('focus', refreshModelCatalog)
+  window.addEventListener('vip:changed', refreshModelCatalog)
   void loadImageOptions().catch(() => undefined)
   void loadBalance().catch(() => undefined)
   applyReuseConfig()
@@ -532,6 +577,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('focus', refreshModelCatalog)
+  window.removeEventListener('vip:changed', refreshModelCatalog)
   viewActive = false
   clearRateLimit()
 })
@@ -596,6 +643,9 @@ function persistDraft() {
   if (usesSizeModeV1.value && (!pricingReady.value || !sizeMode.value || pricingCatalogVersion.value !== selectedModel.value.catalogVersion)) return
   if (!usesSizeModeV1.value && !aspectOptions.value.length) return
   draftStore.saveDraft(draftUserId, {
+    outputFormat: outputFormat.value,
+    frameCount: frameCount.value,
+    frameDurationMs: frameDurationMs.value,
     prompt: form.prompt,
     modelCode: modelCode.value,
     resolutionCode: usesSizeModeV1.value && sizeMode.value === 'auto' ? '' : form.resolutionCode,
@@ -731,7 +781,7 @@ async function loadPricingOptions() {
     const usesV1 = model.sizeContractVersion === 'size-mode-v1'
     const catalogVersion = model.catalogVersion || ''
     if (usesV1 && !catalogVersion) throw new Error('The selected model has no catalog version')
-    const result = await getPricingOptions(usesV1 ? model.value : undefined, usesV1 ? catalogVersion : undefined)
+    const result = await optionsStore.fetchModelPricing(model)
     if (requestId !== pricingRequestId) return
 
     let rawItems: unknown[]
@@ -773,6 +823,12 @@ function applyReuseConfig() {
   }
   if (prompt) form.prompt = prompt
   if (config?.modelCode || config?.modelName) modelCode.value = config.modelCode || config.modelName || ''
+  if (config?.modelCode || config?.modelName) {
+    outputFormat.value = config.outputFormat || 'png'
+    frameCount.value = config.frameCount ?? gifCapability.value?.defaultFrameCount
+    frameDurationMs.value = config.frameDurationMs ?? gifCapability.value?.defaultFrameDurationMs
+    if (selectedModel.value && !gifCapability.value) outputFormat.value = 'png'
+  }
   const usesNewAuto = config?.sizeContractVersion === 'size-mode-v1' && config.sizeMode === 'auto'
   if (config?.sizeMode) sizeMode.value = config.sizeMode
   else if (config?.sizeContractVersion === 'legacy-aspect-auto' && config.aspectRatioCode === 'auto') sizeMode.value = 'auto'
@@ -801,11 +857,33 @@ async function copyPrompt() {
 }
 
 function downloadCurrent() {
-  downloadImage(imageUrl.value, `image-${globalThis.crypto?.randomUUID?.() || 'generated'}.png`)
+  downloadImage(imageUrl.value, `image-${globalThis.crypto?.randomUUID?.() || 'generated'}`)
 }
 
 function getTaskTimeoutMs(imageCount: number) {
   return Math.min(imageCount * TASK_TIMEOUT_PER_IMAGE_MS, MAX_TASK_TIMEOUT_MS)
+}
+
+function readSubmissionIntent(): Omit<CreateImageTaskRequest, 'idempotencyKey' | 'expectedUnitPoints'> {
+  return {
+    prompt: form.prompt,
+    referenceImageUrls: [...form.referenceImageUrls],
+    referenceAssetIds: [...form.referenceAssetIds],
+    sourcePromptId: sourcePromptId.value,
+    ...(supportsQuality.value ? { qualityCode: form.qualityCode } : {}),
+    modelCode: modelCode.value,
+    modelName: modelCode.value,
+    imageCount: Math.min(batchSize.value, maxImageCount.value),
+    ...outputParameters(),
+  }
+}
+
+function outputParameters(): Partial<CreateImageTaskRequest> {
+  if (isGif.value) return { outputFormat: 'gif', frameCount: frameCount.value, frameDurationMs: frameDurationMs.value, aspectRatioCode: form.aspectRatioCode }
+  const explicit = { resolutionCode: form.resolutionCode, aspectRatioCode: form.aspectRatioCode }
+  if (!usesSizeModeV1.value) return explicit
+  const catalogVersion = selectedModel.value?.catalogVersion || ''
+  return sizeMode.value === 'auto' ? { sizeMode: 'auto', catalogVersion } : { sizeMode: 'explicit', catalogVersion, ...explicit }
 }
 
 async function submit() {
@@ -823,7 +901,13 @@ async function submit() {
   if (!validParameterSelection.value) return ElMessage.warning(app.t('playground.parametersRequired'))
   if (form.referenceImageUrls.length + form.referenceAssetIds.length > 6) return ElMessage.warning(app.t('playground.referenceLimit'))
 
-  const imageCount = Math.min(batchSize.value, maxImageCount.value)
+  if (submitting.value) return
+  const expectedUnitPoints = unitPoints.value
+  if (expectedUnitPoints == null) return
+  const intent = readSubmissionIntent()
+  const userId = auth.user?.id
+  const token = auth.token
+  const imageCount = intent.imageCount
   activeImageCount.value = imageCount
   taskResults.value = []
   result.value = null
@@ -839,39 +923,28 @@ async function submit() {
   let submittedRequest: CreateImageTaskRequest | null = null
   let submittedModelKeys: string[] = []
   try {
-    const requestWithoutKey: Omit<CreateImageTaskRequest, 'idempotencyKey'> = {
-      prompt: form.prompt,
-      referenceImageUrls: [...form.referenceImageUrls],
-      referenceAssetIds: [...form.referenceAssetIds],
-      sourcePromptId: sourcePromptId.value,
-      ...(supportsQuality.value ? { qualityCode: form.qualityCode } : {}),
-      modelCode: modelCode.value,
-      modelName: modelCode.value,
-      imageCount,
-      ...(usesSizeModeV1.value
-        ? sizeMode.value === 'auto'
-          ? {
-              sizeMode: 'auto' as const,
-              catalogVersion: selectedModel.value?.catalogVersion || '',
-            }
-          : {
-              sizeMode: 'explicit' as const,
-              catalogVersion: selectedModel.value?.catalogVersion || '',
-              resolutionCode: form.resolutionCode,
-              aspectRatioCode: form.aspectRatioCode,
-            }
-        : {
-            resolutionCode: form.resolutionCode,
-            aspectRatioCode: form.aspectRatioCode,
-          }),
+    await refreshModelCatalog()
+    if (!viewActive) return
+    if (!userId || auth.user?.id !== userId || token !== auth.token || token !== getStoredToken()
+      || JSON.stringify(intent) !== JSON.stringify(readSubmissionIntent())) {
+      ElMessage.warning(app.t('vipPricing.selectionChanged'))
+      return
     }
+    if (optionsLoadFailed.value || !quoteReady.value || !validParameterSelection.value || unitPoints.value == null) return
+    if (selectedModel.value?.access?.available === false) { await offerMembership(); return }
+    const unit = unitPoints.value
+    if (unit > expectedUnitPoints) {
+      ElMessage.warning(app.t(isGif.value ? 'gif.changed' : 'vipPricing.changed').replace('{price}', String(unit)))
+      return
+    }
+    const requestWithoutKey = { ...intent, expectedUnitPoints: unit }
     const request: CreateImageTaskRequest = {
       ...requestWithoutKey,
       idempotencyKey: getOrCreateIdempotencyKey(requestWithoutKey),
     }
     submittedRequest = request
     submittedModelKeys = [request.modelCode, request.modelName || '', selectedModel.value?.name || '', selectedModel.value?.label || '']
-    await performGeneration(request, imageCount, true)
+    await performGeneration(request, imageCount)
   } catch (error) {
     await showGenerationError(
       error,
@@ -886,26 +959,14 @@ async function submit() {
   }
 }
 
-async function performGeneration(request: CreateImageTaskRequest, imageCount: number, allowConsentPrompt: boolean) {
-  try {
-    const response = await generateImage(request)
-    clearIdempotencyKey(request.idempotencyKey)
-    handleInitialResult(response, {
-      expiresAt: Date.now() + getTaskTimeoutMs(imageCount),
-      imageCount,
-    })
-    void refreshCreditData()
-  } catch (error) {
-    if (allowConsentPrompt && isAiConsentRequired(error)) {
-      await openAiConsent(request)
-      return
-    }
-    throw error
-  }
-}
-
-function isAiConsentRequired(error: unknown) {
-  return String((error as ApiError | undefined)?.code || '').trim().toUpperCase() === 'AI_CONSENT_REQUIRED'
+async function performGeneration(request: CreateImageTaskRequest, imageCount: number) {
+  const response = await generateImage(request)
+  clearIdempotencyKey(request.idempotencyKey)
+  handleInitialResult(response, {
+    expiresAt: Date.now() + getTaskTimeoutMs(imageCount),
+    imageCount,
+  })
+  void refreshCreditData()
 }
 
 async function showGenerationError(
@@ -930,6 +991,9 @@ async function showGenerationError(
           ? submittedModelKeys
           : [submittedRequest.modelCode, submittedRequest.modelName || ''],
         imageCount: submittedRequest.imageCount,
+        outputFormat: submittedRequest.outputFormat,
+        frameCount: submittedRequest.frameCount,
+        frameDurationMs: submittedRequest.frameDurationMs,
         sizeContractVersion: submittedRequest.sizeMode ? 'size-mode-v1' : selectedModel.value?.sizeContractVersion || null,
         sizeMode: submittedRequest.sizeMode || null,
         resolutionCode: submittedRequest.sizeMode === 'auto' ? '' : submittedRequest.resolutionCode || '',
@@ -946,6 +1010,11 @@ async function showGenerationError(
     void router.push({ name: 'images' })
     return
   }
+  if (code === 'GIF_NOT_SUPPORTED') {
+    await refreshModelCatalog()
+    ElMessage.warning(withRequestId(app.t('gif.unavailable'), apiError.requestId))
+    return
+  }
   if (code === 'AUTO_SIZE_NOT_SUPPORTED') {
     if (submittedRequest) clearIdempotencyKey(submittedRequest.idempotencyKey)
     await refreshModelCatalog()
@@ -958,7 +1027,13 @@ async function showGenerationError(
     ElMessage.warning(withRequestId(app.t('playground.catalogChanged'), apiError.requestId))
     return
   }
-  if (code === 'RATE_LIMITED' || apiError?.status === 429) {
+  if (code === 'VIP_REQUIRED' || code === 'PRICE_CHANGED') {
+    await refreshModelCatalog()
+    if (code === 'VIP_REQUIRED') await offerMembership(submittedRequest?.modelCode)
+    else ElMessage.warning(app.t(submittedRequest?.outputFormat === 'gif' ? 'gif.changed' : 'vipPricing.changed').replace('{price}', String((apiError?.details as { effectivePoints?: number })?.effectivePoints ?? unitPoints.value ?? '—')))
+    return
+  }
+  if (code === 'RATE_LIMITED'  || apiError?.status === 429) {
     startRateLimit(Math.max(1, Number(apiError.retryAfterSeconds) || 1))
     ElMessage.warning(rateLimitText.value)
     return
@@ -984,10 +1059,20 @@ async function showGenerationError(
   ElMessage.error(withRequestId(fallback, apiError?.requestId))
 }
 
+function frameOptionLabel(count: number) {
+  const label = app.t('gif.frameOption').replace('{count}', String(count))
+  return count === gifCapability.value?.defaultFrameCount ? label + app.t('gif.defaultSuffix') : label
+}
+
+function durationOptionLabel(ms: number) {
+  const label = `${ms} ms`
+  return ms === gifCapability.value?.defaultFrameDurationMs ? label + app.t('gif.defaultSuffix') : label
+}
+
 async function refreshModelCatalog() {
   try {
     await loadImageOptions()
-    await loadPricingOptions()
+    if (!isGif.value) await loadPricingOptions()
   } catch {
     // The fail-closed notices already expose which prerequisite is unavailable.
   }
@@ -1016,72 +1101,6 @@ function clearRateLimit() {
   rateLimitRemainingSeconds.value = 0
 }
 
-async function openAiConsent(request: CreateImageTaskRequest) {
-  try {
-    const documents = await getCurrentLegalDocuments(app.locale)
-    const notice = documents?.aiProcessingNotice
-    if (!notice?.version || !notice.url || !notice.providerCodes?.length) {
-      throw new Error('AI processing notice response is incomplete')
-    }
-    pendingConsentRequest.value = request
-    aiProcessingNotice.value = notice
-    aiConsentVisible.value = true
-  } catch {
-    ElMessage.error(app.t('playground.aiConsentUnavailable'))
-  }
-}
-
-async function acceptAiProcessingConsent() {
-  const notice = aiProcessingNotice.value
-  const request = pendingConsentRequest.value
-  if (!notice || !request) return
-
-  consentSubmitting.value = true
-  let submissionStartedAt = Date.now()
-  let generationStarted = false
-  let recoveryBaseline: TaskRecoveryBaseline = { captured: false, taskIds: [] }
-  try {
-    await updateAiProcessingConsent({
-      accepted: true,
-      documentVersion: notice.version,
-      providerCodes: notice.providerCodes,
-      clientPlatform: 'web',
-    })
-    aiConsentVisible.value = false
-    pendingConsentRequest.value = null
-    activeImageCount.value = request.imageCount
-    taskResults.value = []
-    result.value = null
-    selectedResultIndex.value = 0
-    terminalFailureNoticeShown = false
-    submitting.value = true
-    recoveryBaseline = await captureRecoveryBaseline()
-    if (!viewActive) return
-    submissionStartedAt = Date.now()
-    generationStarted = true
-    await performGeneration(request, request.imageCount, false)
-  } catch (error) {
-    await showGenerationError(
-      error,
-      app.t('playground.aiConsentFailed'),
-      submissionStartedAt,
-      generationStarted ? request : null,
-      [request.modelCode, request.modelName || '', selectedModel.value?.name || '', selectedModel.value?.label || ''],
-      recoveryBaseline,
-    )
-  } finally {
-    submitting.value = false
-    consentSubmitting.value = false
-    if (!aiConsentVisible.value) aiProcessingNotice.value = null
-  }
-}
-
-function clearPendingConsent() {
-  if (consentSubmitting.value) return
-  pendingConsentRequest.value = null
-  aiProcessingNotice.value = null
-}
-
 function getOrCreateIdempotencyKey(payload: Omit<CreateImageTaskRequest, 'idempotencyKey'>) {
   const fingerprint = JSON.stringify(getSubmissionIntent(payload))
   try {
@@ -1099,7 +1118,7 @@ function getOrCreateIdempotencyKey(payload: Omit<CreateImageTaskRequest, 'idempo
 }
 
 function getSubmissionIntent(payload: Omit<CreateImageTaskRequest, 'idempotencyKey'>) {
-  const { catalogVersion: _catalogVersion, ...intent } = payload
+  const { catalogVersion: _catalogVersion, expectedUnitPoints: _expected, ...intent } = payload
   if (intent.sizeMode !== 'auto') return intent
   const { resolutionCode: _resolutionCode, aspectRatioCode: _aspectRatioCode, ...autoIntent } = intent
   return autoIntent
@@ -1116,6 +1135,9 @@ function clearIdempotencyKey(key: string) {
 </script>
 
 <style scoped>
+.format-toggle { --el-segmented-item-selected-bg-color: var(--color-primary-soft); --el-segmented-item-selected-color: var(--color-primary); padding: 4px; }
+.format-toggle :deep(.el-segmented__item) { min-height: 44px; font-size: 16px; font-weight: 700; }
+.format-toggle :deep(.el-segmented__item-selected) { border: 1px solid color-mix(in srgb, var(--color-primary) 30%, transparent); }
 .playground-grid { display: grid; grid-template-columns: minmax(0, 500px) minmax(0, 1fr); gap: 24px; align-items: stretch; }
 .prompt-panel { min-width: 0; padding: 24px; }
 .prompt-input-wrap { position: relative; width: 100%; }
@@ -1176,10 +1198,6 @@ function clearIdempotencyKey(key: string) {
 .generation-data-notice { min-width: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--el-color-danger) 38%, var(--color-border)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--el-color-danger) 7%, var(--color-surface)); display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--el-color-danger); font-size: 13px; font-weight: 700; }
 .generation-data-notice .el-button { flex: 0 0 auto; margin: 0; }
 .deduction-rule { color: var(--color-text-muted); font-size: 12px; line-height: 1.5; }
-.consent-content { display: grid; gap: 12px; color: var(--color-text-muted); line-height: 1.6; }
-.consent-content p { margin: 0; }
-.consent-content a { color: var(--color-primary); font-weight: 700; }
-.consent-providers { font-size: 13px; overflow-wrap: anywhere; }
 .credit-hint, .cost-hint, .rate-limit-hint { color: var(--color-text-muted); font-size: 13px; font-weight: 600; }
 .cost-hint { color: var(--color-primary); }
 .rate-limit-hint { color: var(--el-color-warning); }

@@ -1,5 +1,7 @@
-import { computed, reactive, toValue, type MaybeRefOrGetter } from 'vue'
-import { getMaxImageCount, getPricingOptions } from '@/services/aiImages'
+import { computed, ref, toValue, type MaybeRefOrGetter } from 'vue'
+import { getMaxImageCount } from '@/services/aiImages'
+import { pickUsableModelCode } from '@/utils/modelPresentation'
+import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
 import { getLocalizedImageOptionLabel, sortImageResolutionCodes, useImageOptionsStore } from '@/stores/imageOptions'
 import { isPricingEnvelope, normalizePricingOption, unwrapPricingResult } from '@/utils/imagePricing'
@@ -7,53 +9,14 @@ import type { CanvasGenerateNodeData } from '@/types/canvas'
 import type { AiImagePricingOption, CreateImageTaskRequest, ImageParameterOption, ImageSizeMode } from '@/types/image'
 
 interface PricingEntry {
-  status: 'loading' | 'ready' | 'failed'
+  status: 'ready' | 'failed'
   items: AiImagePricingOption[]
 }
 
-// Shared across canvas nodes: pricing is fetched once per model release, matching the playground contract.
-const pricingCache = reactive(new Map<string, PricingEntry>())
 const AUTO = 'auto'
 
 export function normalizeOptionKey(value: string | number | null | undefined) {
   return String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '')
-}
-
-function pricingKey(model: ImageParameterOption) {
-  return `${model.value}@${model.sizeContractVersion === 'size-mode-v1' ? model.catalogVersion || '' : 'legacy'}`
-}
-
-export async function ensureModelPricing(model: ImageParameterOption | undefined, force = false) {
-  if (!model) return
-  const key = pricingKey(model)
-  const existing = pricingCache.get(key)
-  if (existing && !force && existing.status !== 'failed') return
-  pricingCache.set(key, { status: 'loading', items: [] })
-  try {
-    const usesV1 = model.sizeContractVersion === 'size-mode-v1'
-    const catalogVersion = model.catalogVersion || ''
-    if (usesV1 && !catalogVersion) throw new Error('The selected model has no catalog version')
-    const result = await getPricingOptions(usesV1 ? model.value : undefined, usesV1 ? catalogVersion : undefined)
-    let rawItems: unknown[]
-    if (usesV1) {
-      if (!isPricingEnvelope(result)
-        || normalizeOptionKey(result.modelCode) !== normalizeOptionKey(model.value)
-        || result.catalogVersion !== catalogVersion) {
-        throw new Error('Image pricing catalog does not match the selected model')
-      }
-      rawItems = result.items
-    } else {
-      rawItems = unwrapPricingResult(result)
-    }
-    pricingCache.set(key, {
-      status: 'ready',
-      items: rawItems
-        .map((item, index) => normalizePricingOption(item, index))
-        .filter((item): item is AiImagePricingOption => Boolean(item)),
-    })
-  } catch {
-    pricingCache.set(key, { status: 'failed', items: [] })
-  }
 }
 
 export function useCanvasGenerationOptions(source: MaybeRefOrGetter<CanvasGenerateNodeData | null | undefined>) {
@@ -65,7 +28,42 @@ export function useCanvasGenerationOptions(source: MaybeRefOrGetter<CanvasGenera
   const selectedModel = computed(() => models.value.find((item) => item.value === data.value?.modelCode))
   const usesSizeModeV1 = computed(() => selectedModel.value?.sizeContractVersion === 'size-mode-v1')
   const supportsQuality = computed(() => selectedModel.value?.capabilities?.supportsQuality !== false)
-  const pricing = computed(() => selectedModel.value ? pricingCache.get(pricingKey(selectedModel.value)) : undefined)
+  const auth = useAuthStore()
+  const quote = ref<(PricingEntry & { modelKey: string }) | null>(null)
+  let requestId = 0
+  const modelKey = computed(() => JSON.stringify([auth.user?.id, auth.token, selectedModel.value?.value,
+    selectedModel.value?.sizeContractVersion, selectedModel.value?.catalogVersion]))
+  const pricing = computed(() => quote.value?.modelKey === modelKey.value ? quote.value : null)
+
+  async function ensurePricing() {
+    const id = ++requestId
+    const key = modelKey.value
+    const model = selectedModel.value
+    quote.value = null
+    if (!model) return
+    try {
+      const usesV1 = model.sizeContractVersion === 'size-mode-v1'
+      const catalogVersion = model.catalogVersion || ''
+      if (usesV1 && !catalogVersion) throw new Error('The selected model has no catalog version')
+      const result = await optionsStore.fetchModelPricing(model)
+      let rawItems: unknown[]
+      if (usesV1) {
+        if (!isPricingEnvelope(result)
+          || normalizeOptionKey(result.modelCode) !== normalizeOptionKey(model.value)
+          || result.catalogVersion !== catalogVersion) {
+          throw new Error('Image pricing catalog does not match the selected model')
+        }
+        rawItems = result.items
+      } else {
+        rawItems = unwrapPricingResult(result)
+      }
+      if (id !== requestId || key !== modelKey.value) return
+      quote.value = { modelKey: key, status: 'ready', items: rawItems.map(normalizePricingOption)
+        .filter((item): item is AiImagePricingOption => Boolean(item)) }
+    } catch {
+      if (id === requestId && key === modelKey.value) quote.value = { modelKey: key, status: 'failed', items: [] }
+    }
+  }
   const pricingReady = computed(() => pricing.value?.status === 'ready')
   const pricingFailed = computed(() => pricing.value?.status === 'failed')
   const modelPrices = computed(() => {
@@ -130,7 +128,7 @@ export function useCanvasGenerationOptions(source: MaybeRefOrGetter<CanvasGenera
       .some((value) => normalizeOptionKey(value) === normalizeOptionKey(data.value?.resolutionCode))
   }))
   const imageCount = computed(() => Math.min(Math.max(1, data.value?.imageCount || 1), maxImageCount.value))
-  const estimatedPoints = computed(() => selectedPrice.value ? selectedPrice.value.points * imageCount.value : null)
+  const estimatedPoints = computed(() => selectedPrice.value ? (selectedPrice.value.effectivePoints ?? selectedPrice.value.points) * imageCount.value : null)
   const parametersValid = computed(() => {
     const value = data.value
     if (!value || !selectedModel.value) return false
@@ -155,8 +153,8 @@ export function useCanvasGenerationOptions(source: MaybeRefOrGetter<CanvasGenera
     if (!value) return null
     const patch: Partial<CanvasGenerateNodeData> = {}
     if (!selectedModel.value) {
-      const first = models.value[0]
-      if (first && first.value !== value.modelCode) patch.modelCode = first.value
+      const first = pickUsableModelCode(models.value, null)
+      if (first && first !== value.modelCode) patch.modelCode = first
       return Object.keys(patch).length ? patch : null
     }
     if (selectedModel.value.catalogVersion && value.catalogVersion !== selectedModel.value.catalogVersion) {
@@ -207,8 +205,9 @@ export function useCanvasGenerationOptions(source: MaybeRefOrGetter<CanvasGenera
   function buildRequest(prompt: string, referenceAssetIds: string[]): Omit<CreateImageTaskRequest, 'idempotencyKey'> | null {
     const value = data.value
     const model = selectedModel.value
-    if (!value || !model || !parametersValid.value) return null
+    if (!value || !model || !parametersValid.value || !selectedPrice.value || model.access?.available === false) return null
     const base = {
+      expectedUnitPoints: selectedPrice.value.effectivePoints ?? selectedPrice.value.points,
       prompt,
       modelCode: model.value,
       modelName: model.value,
@@ -259,12 +258,14 @@ export function useCanvasGenerationOptions(source: MaybeRefOrGetter<CanvasGenera
     selectedAspect,
     maxImageCount,
     imageCount,
+    selectedPrice,
     estimatedPoints,
     parametersValid,
     summaryText,
     reconcile,
     aspectPatch,
     buildRequest,
-    ensurePricing: (force = false) => ensureModelPricing(selectedModel.value, force),
+    ensurePricing,
+    modelKey,
   }
 }

@@ -212,13 +212,14 @@ function settleHistoryRecovery(items: ImageRecord[]) {
       && Number.isFinite(createdAt)
       && createdAt >= historyRecovery!.startedAt - RECOVERY_CLOCK_SKEW_MS
       && item.prompt === historyRecovery!.prompt
-      && item.imageCount === historyRecovery!.imageCount
+      && item.imageCount === (historyRecovery!.outputFormat === 'gif' ? 1 : historyRecovery!.imageCount)
       && historyRecovery!.modelKeys.some((key) => modelKeys.includes(normalizeRecoveryKey(key)))
       && matchesRecoverySize(item, historyRecovery!)
       && normalizeRecoveryKey(item.qualityCode) === normalizeRecoveryKey(historyRecovery!.qualityCode)
       && (Array.isArray(item.referenceImageUrls) ? item.referenceImageUrls.length : 0) === historyRecovery!.referenceCount
       && sourcePromptId === historyRecovery!.sourcePromptId
   })
+  if (historyRecovery.outputFormat === 'gif' && candidateTasks.length < historyRecovery.imageCount) return false
   if (!candidateTasks.length || candidateTasks.some(isProcessing)) return false
   if (!candidateTasks.some((item) => isSuccess(item) || isFailure(item))) return false
   finishHistoryRecovery()
@@ -226,6 +227,10 @@ function settleHistoryRecovery(items: ImageRecord[]) {
 }
 
 function matchesRecoverySize(item: ImageRecord, recovery: ImageTaskHistoryRecovery) {
+  if ((item.outputFormat ?? 'png') !== (recovery.outputFormat ?? 'png')) return false
+  if (recovery.outputFormat === 'gif') return item.frameCount === recovery.frameCount
+    && item.frameDurationMs === recovery.frameDurationMs
+    && item.aspectRatioCode === recovery.aspectRatioCode
   if (recovery.sizeMode) {
     if (item.sizeMode !== recovery.sizeMode) return false
     if (recovery.sizeContractVersion && item.sizeContractVersion !== recovery.sizeContractVersion) return false
