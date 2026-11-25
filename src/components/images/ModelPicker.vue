@@ -28,7 +28,7 @@
         <div class="model-option" :class="{ locked: isLocked(model) }" @click="isLocked(model) && openGuide(model)">
           <ModelIcon :provider="model.provider" :code="model.value" />
           <span class="model-copy">
-            <span class="model-name">{{ displayName(model) }}</span>
+            <span class="model-name">{{ displayName(model) }}<span v-if="showGifBadge && offersGif(model)" class="gif-badge" data-testid="model-gif-badge">GIF</span></span>
             <span v-if="describe(model)" class="model-description">{{ describe(model) }}</span>
           </span>
           <el-icon v-if="isLocked(model)" class="model-lock"><Lock /></el-icon>
@@ -54,7 +54,13 @@ const props = withDefaults(defineProps<{
   placeholder?: string
   teleported?: boolean
   compact?: boolean
-}>(), { loading: false, placeholder: '', teleported: true, compact: false })
+  /** Mark models that offer animated GIF output (home page only; the canvas has no GIF mode). */
+  showGifBadge?: boolean
+}>(), { loading: false, placeholder: '', teleported: true, compact: false, showGifBadge: false })
+
+function offersGif(model: ImageParameterOption) {
+  return Boolean(model.capabilities?.gif) && model.sizeContractVersion !== 'size-mode-v1'
+}
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
@@ -126,4 +132,8 @@ function openGuide(model: ImageParameterOption) {
 .model-picker-popper .model-description { font-size: 12px; font-weight: 400; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-picker-popper .model-lock { color: var(--color-text-muted); }
 .model-picker-popper .el-select-dropdown__item.is-selected .model-name { color: var(--color-primary); }
+.model-picker-popper .gif-badge {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; vertical-align: 1px;
+  background: var(--color-primary-soft); color: var(--color-primary); font-size: 11px; font-weight: 700; line-height: 18px;
+}
 </style>

@@ -22,7 +22,7 @@
             />
           </el-form-item>
           <el-form-item :label="app.t('playground.model')">
-            <ModelPicker v-model="modelCode" :models="modelOptions" :loading="optionsStore.loading" @locked="offerMembership" />
+            <ModelPicker v-model="modelCode" :models="modelOptions" :loading="optionsStore.loading" show-gif-badge @locked="offerMembership" />
           </el-form-item>
           <el-form-item v-if="gifCapability" :label="app.t('gif.format')">
             <el-segmented v-model="outputFormat" class="format-toggle" :options="[{ label: 'PNG', value: 'png' }, { label: 'GIF', value: 'gif' }]" />

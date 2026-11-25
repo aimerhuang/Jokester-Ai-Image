@@ -61,7 +61,7 @@ async function choose(page: Page, label: string, value: string) {
 
 test('GIF 参数、固定价规则、草稿和按价格提交', async ({ page }) => {
   const state = await open(page)
-  await page.getByText('GIF', { exact: true }).click()
+  await page.locator('.format-toggle').getByText('GIF', { exact: true }).click()
   await expect(field(page, '分辨率')).toContainText('默认（由画面比例决定）')
   await expect(field(page, '分辨率').getByRole('combobox')).toBeDisabled()
   await expect(field(page, '帧数')).toContainText('9 帧（默认）')
@@ -101,10 +101,10 @@ test('GIF 参数、固定价规则、草稿和按价格提交', async ({ page })
 
 test('切换普通模型后恢复 PNG 参数与报价', async ({ page }) => {
   const state = await open(page)
-  await page.getByText('GIF', { exact: true }).click()
+  await page.locator('.format-toggle').getByText('GIF', { exact: true }).click()
   await page.locator('.model-picker').click()
   await page.getByRole('option', { name: /Still/ }).click()
-  await expect(page.getByText('GIF', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.format-toggle')).toHaveCount(0)
   await expect(field(page, '帧数')).toHaveCount(0)
   await expect(page.locator('.cost-hint')).toContainText('20')
   await page.locator('textarea').fill('still photo')
@@ -116,7 +116,7 @@ test('切换普通模型后恢复 PNG 参数与报价', async ({ page }) => {
 
 test('同模型 GIF 价格上调需要重新确认', async ({ page }) => {
   const state = await open(page)
-  await page.getByText('GIF', { exact: true }).click()
+  await page.locator('.format-toggle').getByText('GIF', { exact: true }).click()
   await page.locator('textarea').fill('jump')
   state.reserveBase = 5
   await page.locator('button.generate').click()
@@ -147,7 +147,7 @@ test('作品与详情显示 GIF 积分、鉴权下载及 GIF 复用配置', asyn
 
 test('带参考图的 GIF 按整批价格比较余额，并提交素材 ID', async ({ page }) => {
   const state = await open(page, 400)
-  await page.getByText('GIF', { exact: true }).click()
+  await page.locator('.format-toggle').getByText('GIF', { exact: true }).click()
   await page.locator('input[type=file]').setInputFiles({ name: 'input.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2n0cAAAAASUVORK5CYII=', 'base64') })
   await expect(page.locator('.cost-hint')).toContainText('44')
   await choose(page, '生成数量', '4张')
@@ -159,4 +159,17 @@ test('带参考图的 GIF 按整批价格比较余额，并提交素材 ID', asy
   await page.locator('button.generate').click()
   await expect.poll(() => state.requests.length).toBe(1)
   expect(state.requests[0]).toMatchObject({ outputFormat: 'gif', expectedUnitPoints: 116, qualityCode: 'high', referenceAssetIds: ['ref-7'], referenceImageUrls: [] })
+})
+
+test('模型下拉标出支持 GIF 的模型，侧边栏不出现内部滚动条', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 640 })
+  await open(page)
+  await page.locator('.model-picker').click()
+  await expect(page.getByRole('option', { name: /Studio/ }).getByTestId('model-gif-badge')).toHaveText('GIF')
+  await expect(page.getByRole('option', { name: /Still/ }).getByTestId('model-gif-badge')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  // Even on a short window every menu item is reachable by page scroll; the sidebar never scrolls on its own.
+  const sidebar = await page.locator('.sidebar').evaluate((el) => ({ overflowY: getComputedStyle(el).overflowY, inner: el.scrollHeight - el.clientHeight }))
+  expect(sidebar.overflowY).toBe('visible')
+  expect(sidebar.inner).toBeLessThanOrEqual(0)
 })

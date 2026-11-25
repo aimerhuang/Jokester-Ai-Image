@@ -288,7 +288,7 @@ Authorization: Bearer <accessToken>
 
 ### 首页 GIF 动图
 
-Web 通过模型列表中 `capabilities.gif` 发现动图能力。用户从默认 PNG 切换为 GIF 后，可选显式比例、Low / Med / High、生成数量、帧数与每帧时长。帧数和时长的选项、默认值与价格公式参数均使用服务端下发值。对于 `size-mode-v1` 模型，首页使用已有发布版尺寸协议，GIF 入口仅供具备此能力的 legacy 模型使用。
+Web 通过模型列表中 `capabilities.gif` 发现动图能力；首页模型下拉为这些模型显示「GIF」角标（画布不显示，画布没有 GIF 模式）。用户从默认 PNG 切换为 GIF 后，可选显式比例、Low / Med / High、生成数量、帧数与每帧时长。帧数和时长的选项、默认值与价格公式参数均使用服务端下发值。对于 `size-mode-v1` 模型，首页使用已有发布版尺寸协议，GIF 入口仅供具备此能力的 legacy 模型使用。
 
 创建沿用 `POST /api/ai/images`。GIF 请求增加 `outputFormat: "gif"`、`frameCount`、`frameDurationMs` 并传 `qualityCode`、`aspectRatioCode`。单帧尺寸由比例决定，请求省略 `resolutionCode`、`sizeMode` 和 `catalogVersion`。参考图与 `idempotencyKey` 沿用原接口。格式、帧数和时长加入本地提交指纹、会话草稿以及未知任务的历史恢复匹配。
 
