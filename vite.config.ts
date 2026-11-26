@@ -131,6 +131,10 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_API_PROXY_TARGET || 'http://localhost:5049',
           changeOrigin: true,
         },
+        '/site-media': {
+          target: env.VITE_API_PROXY_TARGET || 'http://localhost:5049',
+          changeOrigin: true,
+        },
         '/avatar': {
           target: env.VITE_API_PROXY_TARGET || 'http://localhost:5049',
           changeOrigin: true,

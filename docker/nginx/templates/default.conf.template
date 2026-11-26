@@ -71,6 +71,10 @@ server {
         proxy_pass http://jokester_api;
     }
 
+    location ^~ /site-media/ {
+        proxy_pass http://jokester_api;
+    }
+
     location ^~ /prompt-images/ {
         proxy_pass http://jokester_api;
     }
