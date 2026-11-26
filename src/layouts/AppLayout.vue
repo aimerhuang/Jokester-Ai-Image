@@ -37,12 +37,16 @@
             <el-icon><Coin /></el-icon>
             <span>{{ credits.summary.balance }} | {{ app.t('recharge.entry') }}</span>
           </el-button>
+          <AnnouncementBell :unread="notices.unread" @open="announcementsOpen = true" />
           <LocaleToggle />
           <ThemeToggle />
         </div>
       </header>
       <router-view />
     </section>
+
+    <AnnouncementDrawer v-model="announcementsOpen" />
+    <QqGroupDialog v-if="promptConfig" v-model="qqOpen" :config="promptConfig" @action="notices.recordQqAction" />
 
     <el-drawer v-model="drawer" size="280px" direction="ltr">
       <div class="drawer-content">
@@ -119,6 +123,11 @@ import LegalLinks from '@/components/common/LegalLinks.vue'
 import LocaleToggle from '@/components/common/LocaleToggle.vue'
 import MonthlyVipBadge from '@/components/common/MonthlyVipBadge.vue'
 import ThemeToggle from '@/components/common/ThemeToggle.vue'
+import AnnouncementBell from '@/components/notices/AnnouncementBell.vue'
+import AnnouncementDrawer from '@/components/notices/AnnouncementDrawer.vue'
+import QqGroupDialog from '@/components/notices/QqGroupDialog.vue'
+import type { QqGroupConfig } from '@/services/announcements'
+import { useAnnouncementsStore } from '@/stores/announcements'
 import { updateNickname, updatePassword } from '@/services/user'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -128,6 +137,10 @@ import type { ApiError } from '@/types/api'
 const app = useAppStore()
 const auth = useAuthStore()
 const credits = useCreditsStore()
+const notices = useAnnouncementsStore()
+const announcementsOpen = ref(false)
+const qqOpen = ref(false)
+const promptConfig = ref<QqGroupConfig | null>(null)
 const router = useRouter()
 const route = useRoute()
 const drawer = ref(false)
@@ -153,6 +166,7 @@ const navItems = [
   { to: '/admin/pricing', label: 'adminPricing.title', superAdminOnly: true },
   { to: '/admin/models', label: 'nav.modelConfig', superAdminOnly: true },
   { to: '/admin/users', label: 'users.title', superAdminOnly: true },
+  { to: '/admin/announcements', label: 'nav.announcementAdmin', superAdminOnly: true },
   { to: '/admin/redeem-codes', label: 'nav.codeGenerator', superAdminOnly: true },
   { to: '/profile', label: 'nav.profile' },
 ]
@@ -161,10 +175,10 @@ const visibleNavItems = computed(() => navItems.filter((item) => !item.superAdmi
 onMounted(() => {
   auth.ensureCurrentUser().catch(() => undefined)
   credits.fetchSummary().catch(() => undefined)
-  document.addEventListener('visibilitychange', refreshVisibleBalance)
+  document.addEventListener('visibilitychange', refreshWhenVisible)
 })
 
-onBeforeUnmount(() => document.removeEventListener('visibilitychange', refreshVisibleBalance))
+onBeforeUnmount(() => document.removeEventListener('visibilitychange', refreshWhenVisible))
 
 watch(() => auth.token, (token, previousToken) => {
   if (token && token !== previousToken) {
@@ -173,8 +187,38 @@ watch(() => auth.token, (token, previousToken) => {
   }
 })
 
-function refreshVisibleBalance() {
-  if (document.visibilityState === 'visible') void credits.fetchSummary().catch(() => undefined)
+// A token refresh can replace the current profile while this layout stays mounted.
+let promptAttemptedFor: number | null = null
+watch([() => auth.user?.id, () => auth.token], async ([userId, token], previous, onCleanup) => {
+  const owner = token && userId ? userId : null
+  const ownerChanged = owner !== previous[0]
+  if (ownerChanged) {
+    announcementsOpen.value = qqOpen.value = false
+    promptConfig.value = null
+    promptAttemptedFor = null
+  }
+  notices.activateForUser(owner)
+  if (!owner) return
+  let active = true
+  let timer: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => { active = false; clearTimeout(timer) })
+  // A rotated token for the same user is not a reason to refetch.
+  await (ownerChanged ? notices.refresh() : notices.refreshIfStale())
+  if (!active || promptAttemptedFor === owner) return
+  timer = setTimeout(() => {
+    promptAttemptedFor = owner
+    const otherModal = Array.from(document.querySelectorAll('.el-overlay'))
+      .some(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden')
+    if (otherModal) return
+    promptConfig.value = notices.takeQqPrompt()
+    qqOpen.value = Boolean(promptConfig.value)
+  }, 800)
+}, { immediate: true })
+
+function refreshWhenVisible() {
+  if (document.visibilityState !== 'visible') return
+  void credits.fetchSummary().catch(() => undefined)
+  void notices.refreshIfStale()
 }
 
 function openSettings() {

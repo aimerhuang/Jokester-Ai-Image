@@ -28,7 +28,7 @@ VITE_DEFAULT_LOCALE=zh-CN
 VITE_DEFAULT_THEME=light
 ```
 
-开发代理在 [vite.config.ts](vite.config.ts) 中配置：`/api`、`/ai-images`、`/avatar` 和 `/nano-banana2-images` 默认转发到 `VITE_API_PROXY_TARGET`。`/api/avatar` 会重写为后端 `/avatar`。提示词封面优先代理到 `VITE_PROMPT_IMAGE_PROXY_TARGET`；未配置代理时，由开发服务器从 `VITE_PROMPT_IMAGE_ROOT` 只读提供 `/prompt-images/`。
+开发代理在 [vite.config.ts](vite.config.ts) 中配置：`/api`、`/ai-images`、`/avatar`、`/site-media` 和 `/nano-banana2-images` 默认转发到 `VITE_API_PROXY_TARGET`。`/api/avatar` 会重写为后端 `/avatar`。提示词封面优先代理到 `VITE_PROMPT_IMAGE_PROXY_TARGET`；未配置代理时，由开发服务器从 `VITE_PROMPT_IMAGE_ROOT` 只读提供 `/prompt-images/`。
 
 ## 源码结构
 
@@ -42,7 +42,7 @@ VITE_DEFAULT_THEME=light
 
 ## 主要路由
 
-除独立全屏的 `/recharge` 外，受保护路由由 [src/layouts/AppLayout.vue](src/layouts/AppLayout.vue) 包裹；未登录会跳转 `/login`。`/admin/users`、`/admin/users/:id`、`/admin/models`、`/admin/pricing` 与 `/admin/redeem-codes` 还要求当前用户 `isSuperAdmin=true`（路由 `meta.requiresSuperAdmin` + 导航 `superAdminOnly`）。
+除独立全屏的 `/recharge` 和 `/canvas/:canvasId` 外，受保护路由由 [src/layouts/AppLayout.vue](src/layouts/AppLayout.vue) 包裹；未登录会跳转 `/login`。`/admin/users`、`/admin/users/:id`、`/admin/models`、`/admin/pricing`、`/admin/announcements` 与 `/admin/redeem-codes` 还要求当前用户 `isSuperAdmin=true`（路由 `meta.requiresSuperAdmin` + 导航 `superAdminOnly`）。
 
 - `/canvas`（无限画布列表）
 - `/canvas/:canvasId`（无限画布编辑器，独立全屏，需登录）
@@ -57,6 +57,7 @@ VITE_DEFAULT_THEME=light
 - `/model-status`（模型状态，所有登录用户）
 - `/recharge`
 - `/admin/users`、`/admin/users/:id`（用户管理和积分详情，仅超级管理员）
+- `/admin/announcements`（公告、公开封面与 QQ 群弹窗配置，仅超级管理员）
 - `/admin/models`（模型配置，仅超级管理员）
 - `/admin/pricing`（生图定价、VIP 折扣与专属策略，仅超级管理员）
 - `/admin/redeem-codes`（仅超级管理员）

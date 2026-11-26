@@ -54,11 +54,12 @@ test('shows the super-admin entry immediately after login', async ({ page }) => 
 
   await expect(page).toHaveURL(/\/playground$/)
   await expect(page.getByRole('link', { name: '兑换码生成' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '公告管理' })).toBeVisible()
   expect(profileRequests).toBe(1)
 
   await page.getByRole('link', { name: '积分定价' }).click()
   await expect(page).toHaveURL(/\/pricing$/)
-  await expect(page.getByRole('heading', { name: '积分定价', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '生图计费与定价公示', exact: true })).toBeVisible()
 
   await page.getByRole('link', { name: '兑换码生成' }).click()
   await expect(page).toHaveURL(/\/admin\/redeem-codes$/)
